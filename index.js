@@ -25,7 +25,7 @@ const port = process.env.PORT || 8888;
 
 
 // Define the base URL for Netlify deployment
-const netlifyBaseUrl = 'https://firefly-musical-alien.ngrok-free.app';
+const netlifyBaseUrl = 'https://bpm-flash-v2.onrender.com';
 const originURL = `${netlifyBaseUrl}`
 
 // Define the base URL for Repl.it deployment
