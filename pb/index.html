@@ -11,80 +11,138 @@
     <script src="https://cdn.socket.io/4.1.2/socket.io.min.js"></script>
 </head>
 <body id="1b">
-    <!-- Floating BPM Balloon -->
-    <div id="bpm-balloon" class="bpm-balloon">
-        <span class="balloon-text">BPM: <span id="balloon-bpm">0</span></span>
+  <div id="bpm-balloon" class="bpm-balloon" draggable="true" touch-action="none" style="
+    opacity: 0.44;
+">
+    <div class="balloon-text">
+      BPM: <span id="balloon-bpm">0</span> = <span id="balloon-bpm-original">0</span> * <span id="balloon-multiplier">1</span>
     </div>
+  </div>
+
+  <!-- Overlay Container -->
+  <div class="overlay-container" style="
+  opacity: 0.74;
+">
+        <div class="overlay" style="
+    display: inline-flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: stretch;
+    justify-content: center;
+    align-content: space-around;
+">
+        <!-- Content to display BPM and song information -->
+        <select class="bpm-mode-selector" style="
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+">
+          <option value="manual">Simple Manual tap-to-BPM</option>
+          <option value="microphone">Microphone</option>
+          <option value="youtube">YouTube</option>
+          <option value="search">Search</option>
+        </select>
+        <div class="bpm-mode-container" style="
+    display: grid;
+    flex-direction: column;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    align-content: center;
+    justify-items: center;
+">
+          <div class="manual-input mode-section" style="display: flex;flex-direction: column;flex-wrap: wrap;align-items: stretch;">
+            <button id="tap-tempo-simple" class="bpm-button" style="
+    display: inline-grid;
+    align-items: center;
+    justify-items: stretch;
+    align-content: center;
+    justify-content: space-evenly;
+">Tap Tempo</button>
+            <button id="clear-taps-simple" class="bpm-button" style="
+    display: inline-grid;
+    align-items: center;
+    justify-items: stretch;
+    align-content: center;
+    justify-content: space-evenly;
+">Clear Taps</button>
+
+
+            <div class="tap-info" style="justify-items: center;display: inline-flex;flex-wrap: wrap;align-content: stretch;align-items: center;justify-content: center;flex-direction: column;">Tap at least 4 times to get a BPM</div>
+          </div>
+          
+          <div class="microphone-input mode-section" style="display: none;">
+            <div class="waveform-container">
+              <canvas id="waveformCanvas"></canvas>
+            </div>
+            <div class="mic-controls">
+              <button id="start-mic" class="bpm-button">Start Microphone</button>
+              <button id="stop-mic" class="bpm-button" disabled="">Stop</button>
+            </div>
+                      <div class="mic-settings">
+              <h4 style="margin: 0 0 10px 0; color: rgba(255, 239, 213, 0.9); text-align: center;">Settings</h4>
+              <div class="threshold-control">
+                <label for="threshold-slider">Threshold: <span id="threshold-value">0.3</span></label>
+                <input type="range" id="threshold-slider" min="0.1" max="0.9" step="0.05" value="0.3" class="slider">
+              </div>
+              <div class="mic-volume-control">
+                <label for="volume-gain-slider">Volume Gain: <span id="volume-gain-value">1.0</span></label>
+                <input type="range" id="volume-gain-slider" min="0.1" max="5.0" step="0.1" value="1.0" class="slider">
+              </div>
+              <div class="beat-flash-control" style="text-align: center; display: inline-flex; align-content: stretch; justify-content: space-evenly; align-items: center; flex-direction: column; flex-wrap: wrap; opacity: 0.77;">
+                <span class="toggle-label" style="opacity: 0.95; color: rgba(255, 239, 213, 0.75);">Flash on Beat</span>
+                <div class="toggle-container">
+                  <div>
+                    <input type="checkbox" id="beat-flash-toggle" class="extract-toggle-checkbox">
+                    <label for="beat-flash-toggle" class="extract-toggle-label"></label>
+                    <div class="extract-toggle-slider"><br></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bpm-update-control" style="text-align: center; display: inline-flex; align-content: stretch; justify-content: space-evenly; align-items: center; flex-direction: column; flex-wrap: wrap; opacity: 0.77;">
+                <span class="toggle-label" style="opacity: 0.95; color: rgba(255, 239, 213, 0.75);">Stable BPM Updates (5s)</span>
+                <div class="toggle-container">
+                  <div>
+                    <input type="checkbox" id="stable-bpm-toggle" class="extract-toggle-checkbox" checked>
+                    <label for="stable-bpm-toggle" class="extract-toggle-label"></label>
+                    <div class="extract-toggle-slider"><br></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mic-status">Click Start to begin analysis</div>
+          </div>
+          
+          <div class="youtube-input mode-section" style="display: none;">
+            <input type="text" placeholder="Enter YouTube URL" class="bpm-input">
+            <button class="bpm-button analyze-btn">Analyze</button>
+            <div class="youtube-info"></div>
+            <div class="progress-bar" style="display: none;"></div>
+          </div>
+          
+          <div class="search-input mode-section" style="display: none;">
+            <input type="text" placeholder="Song Title" class="bpm-input">
+            <input type="text" placeholder="Artist" class="bpm-input">
+            <div style="display: flex; justify-content: center; gap: 10px;">
+              <button class="bpm-button analyze-btn">Search</button>
+              <button class="bpm-button current-song-btn">Use Current Song</button>
+            </div>
+            <div class="search-info"></div>
+            <div class="progress-bar" style="display: none;"></div>
+          </div>
+        </div>
+</div>
+
+  </div>
+
+
+
     <!-- Overlay Container -->
     <div class="overlay-container" style="
           opacity: 0.74;
       ">
         <!-- Content to display BPM and song information -->
-        <select class="bpm-mode-selector">
-      <option value="manual">Manual BPM</option>
-      <option value="microphone">Microphone</option>
-      <option value="youtube">YouTube</option>
-      <option value="tunebat">Google Search</option>
-    </select>
-    <div class="bpm-mode-container">
-      <div class="manual-input mode-section" style="display: block;">
-        <button id="tap-tempo" class="bpm-button">Tap Tempo</button>
-        <button id="clear-taps" class="bpm-button">Clear Taps</button>
-        <div class="tap-info" style="justify-items: center;display: inline-flex;flex-direction: row;flex-wrap: nowrap;align-content: center;align-items: stretch;justify-content: space-evenly;">Tap at least 4 times to get a BPM</div>
-      </div>
-      
-      <div class="microphone-input mode-section" style="display: none;">
-        <div class="waveform-container">
-          <canvas id="waveformCanvas"></canvas>
-        </div>
-        <div class="mic-controls">
-          <button id="start-mic" class="bpm-button">Start Microphone</button>
-          <button id="stop-mic" class="bpm-button" disabled>Stop</button>
-        </div>
-                  <div class="mic-settings">
-          <h4 style="margin: 0 0 10px 0; color: rgba(255, 239, 213, 0.9); text-align: center;">Settings</h4>
-          <div class="threshold-control">
-            <label for="threshold-slider">Threshold: <span id="threshold-value">0.3</span></label>
-            <input type="range" id="threshold-slider" min="0.1" max="0.9" step="0.05" value="0.3" class="slider">
-          </div>
-          <div class="mic-volume-control">
-            <label for="volume-gain-slider">Volume Gain: <span id="volume-gain-value">1.0</span></label>
-            <input type="range" id="volume-gain-slider" min="0.1" max="5.0" step="0.1" value="1.0" class="slider">
-          </div>
-          <div class="beat-flash-control">
-            <label class="toggle-label">
-              <span class="toggle-text">Flash on Beat</span>
-              <input type="checkbox" id="beat-flash-toggle">
-            </label>
-          </div>
-          <div class="bpm-update-control">
-            <label class="toggle-label">
-              <span class="toggle-text">Stable BPM Updates (5s)</span>
-              <input type="checkbox" id="stable-bpm-toggle" checked>
-            </label>
-          </div>
-        </div>
-        <div class="mic-status">Click Start to begin analysis</div>
-      </div>
-      
-      <div class="youtube-input mode-section" style="display: none;">
-        <input type="text" placeholder="Enter YouTube URL" class="bpm-input">
-        <button class="bpm-button analyze-btn">Analyze</button>
-        <div class="youtube-info"></div>
-        <div class="progress-bar" style="display: none;"></div>
-      </div>
-      
-      <div class="tunebat-input mode-section" style="display: none;">
-        <input type="text" placeholder="Song Title" class="bpm-input">
-        <input type="text" placeholder="Artist" class="bpm-input">
-        <div style="display: flex; justify-content: center; gap: 10px;">
-          <button class="bpm-button analyze-btn">Search</button>
-          <button class="bpm-button current-song-btn">Use Current Song</button>
-        </div>
-        <div class="tunebat-info"></div>
-        <div class="progress-bar" style="display: none;"></div>
-      </div>
-    </div>
         <div class="overlay" id="playerData">
             <div id="song-info">
                 <!-- Display "Now Playing" indicator -->
@@ -93,8 +151,6 @@
                 <p id="song-details" style="display: none;">Song: <span id="song-title"></span></p>
                 <!-- Display the BPM -->
                 <p>BPM: <span id="bpm">0</span></p>
-                <!-- Container for BPM option buttons -->
-                <p id="bpm-buttons-container" style="margin-top: 10px;display: inline-grid;background-color: rgba(0, 0, 0, 0.2);padding: 8px;border-radius: 8px;overflow-wrap: break-word;max-width: 54%;justify-items: stretch;grid-template-columns: repeat(3, 1fr);"><br></p>
             </div>
             <!-- Playback Controls (updated) -->
           <div class="play-controls" style="
@@ -175,6 +231,16 @@
     margin: 2px;">
           Add in BPM Playlist
       </button>
+      <button  id="manualXmultiplied-check-add" style="
+      background-color: rgba(64, 64, 64, 0.66);
+      color: rgba(255, 239, 213, 0.70);
+      border: none;
+      border-radius: 15px;
+      padding: 5px 10px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      margin: 2px;">
+            Add in BPM Playlist<br>based on Multiplier
+        </button>
       <div>
       </div>
 
@@ -293,7 +359,7 @@
 
             </div>              
                 <!-- Toggle switch container with label -->
-          <div class="special-color-toggles" style="display: flex;flex-direction: column;flex-wrap: wrap;align-content: center;justify-content: space-evenly;align-items: center;">
+          <div class="special-color-toggles" style="display: flex;flex-direction: column;flex-wrap: wrap;align-content: space-around;justify-content: space-evenly;align-items: flex-end;">
           <div>
             <span class="toggle-label">Randomize colors</span>
             <div style="
@@ -347,31 +413,8 @@
                   <div class="extract-toggle-slider"></div>
                 </div>
               </div>
-            </div>
-          </div>
-          
-          <div>
-            <span class="toggle-label">Auto-fetch BPM from Google</span>
-            <div style="
-                  text-align: center;
-                  display: inline-flex;
-                  height: 45px;
-                  align-content: stretch;
-                  justify-content: space-evenly;
-                  justify-items: center;
-                  align-items: center;
-                  flex-direction: column;
-                  flex-wrap: wrap;
-               ">
 
-              <div class="toggle-container" id="tunebat-toggle-container">
 
-                <div> 
-                  <input type="checkbox" id="tunebat-auto-toggle" class="extract-toggle-checkbox">
-                  <label for="tunebat-auto-toggle" class="extract-toggle-label"></label>
-                  <div class="extract-toggle-slider"></div>
-                </div>
-              </div>
             </div>
           </div>
             </div>
@@ -446,24 +489,19 @@
             <!-- Tempo Reset Button -->
             <button id="reset-button">1x</button>
         </div>
-        
-        <!-- Additional Tempo Controls -->
+      
         <div class="tempo-controls">
-            <!-- One-Third Button -->
-            <button id="one-third-button">1/3x</button>
-            <!-- Two-Thirds Button -->
-            <button id="two-thirds-button">2/3x</button>
-            <!-- Three-Quarters Button -->
-            <button id="three-quarters-button">3/4x</button>
-            <!-- Two-and-Half Button -->
-            <button id="two-half-button">2.5x</button>
-            <!-- Triple Button -->
-            <button id="triple-button">3x</button>
-        </div>
-        
-        <!-- Save Base BPM Button -->
-        <button id="save-base-bpm" class="button-darker">Save Current BPM as Base</button>
-
+          <!-- One-Third Button -->
+          <button id="one-third-button">1/3x</button>
+          <!-- Two-Thirds Button -->
+          <button id="two-thirds-button">2/3x</button>
+          <!-- Three-Quarters Button -->
+          <button id="three-quarters-button">3/4x</button>
+          <!-- Two-and-Half Button -->
+          <button id="two-half-button">2.5x</button>
+          <!-- Triple Button -->
+          <button id="triple-button">3x</button>
+      </div>
         <div class="skip-mode-container" id="skip-mode-container">
         <!-- Skip Mode Dropdown -->
           <div style="display: inline-flex;justify-content: center; align-items: center;">
@@ -474,7 +512,7 @@
         </select>
         
         <!-- BPM Threshold Input -->
-        <input type="number" id="bpm-threshold" placeholder="Enter BPM" style="display: inline-flex;justify-content: center; align-items: center;">
+        <input type="number" id="bpm-threshold" placeholder="Enter BPM" style="display: inline-flex;justify-content: center; align-items: center;min-width: 33%;">
     <div style="display: inline-table;">
         <!-- Low Range Input (for outside mode) -->
         <input type="number" id="low-range" placeholder="Lowest BPM" style="display: none;justify-content: center; align-items: center;">

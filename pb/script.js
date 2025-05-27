@@ -1,9 +1,9 @@
 document.addEventListener("DOMContentLoaded", function () {
     // Initialize variables and flags
     let currentBPM = 0;
-    const isCustomBPM = false;
+    let isCustomBPM = false;
     let customBPM = 0;
-    const isPlaying = true;
+    let isPlaying;
     let lastKnownBPM = 0;
     let lastKnownSongDetails = "N/A";
     let customTrackURL = "";
@@ -13,6 +13,7 @@ document.addEventListener("DOMContentLoaded", function () {
     let songAndBPMUpdated = false;
     let isTransitionUpdated = false;
     const bpmElement = document.getElementById("bpm");
+    const bpmBalloon = document.getElementById("balloon-bpm");
     const songTitleElement = document.getElementById("song-title");
     const customColorsInput = document.getElementById("custom-colors");
     const setColorsButton = document.getElementById("set-colors-button");
@@ -40,772 +41,6 @@ document.addEventListener("DOMContentLoaded", function () {
     let autoSaveLastSongUrl = "";
     let autoSaveTimeStamp = 0;
 
-    // BPM Detection Mode Implementation
-    let audioContext = null;
-    let analyser = null;
-    let microphone = null;
-    let animationFrame = null;
-    let dataArray = null;
-    let peakTimes = [];
-    let lastPeakTime = 0;
-    let bpmHistory = [];
-    let startTime = null;
-    let microphoneActive = false;
-    let beatThreshold = 0.3;
-    let flashOnBeat = false;
-    let stableBpmUpdates = true;
-    let lastBpmUpdateTime = 0;
-    let bpmUpdateInterval = 5000; // 5 seconds
-    let volumeGain = 1.0;
-    let gainNode = null;
-    
-    // Make sure to initialize these UI elements as soon as the document loads
-    document.addEventListener('DOMContentLoaded', function() {
-        const thresholdSlider = document.getElementById('threshold-slider');
-        const thresholdValue = document.getElementById('threshold-value');
-        const beatFlashToggle = document.getElementById('beat-flash-toggle');
-        const stableBpmToggle = document.getElementById('stable-bpm-toggle');
-        
-        if (thresholdSlider && thresholdValue) {
-            thresholdSlider.value = beatThreshold;
-            thresholdValue.textContent = beatThreshold;
-        }
-        
-        if (beatFlashToggle) {
-            beatFlashToggle.checked = flashOnBeat;
-        }
-        
-        if (stableBpmToggle) {
-            stableBpmToggle.checked = stableBpmUpdates;
-        }
-    });
-
-    // Initialize BPM detection modes
-    initializeBPMModeSwitcher();
-
-    // Function to initialize the BPM mode selector
-    function initializeBPMModeSwitcher() {
-        const bpmModeSelector = document.querySelector('.bpm-mode-selector');
-        if (!bpmModeSelector) return;
-        
-        const modeSections = document.querySelectorAll('.mode-section');
-        
-        bpmModeSelector.addEventListener('change', function() {
-            const selectedMode = this.value;
-            
-            // Stop microphone if it's active and we're switching modes
-            if (microphoneActive && selectedMode !== 'microphone') {
-                stopMicrophoneAnalysis();
-            }
-            
-            // Clear any BPM option buttons when switching modes
-            clearBpmOptionButtons();
-            
-            // Hide all mode sections first
-            modeSections.forEach(section => {
-                section.style.display = 'none';
-            });
-            
-            // Show the selected mode section
-            const activeSection = document.querySelector(`.${selectedMode}-input`);
-            if (activeSection) {
-                activeSection.style.display = 'inline-flex';
-            }
-        });
-        
-        // Set up tap tempo functionality
-        setupTapTempo();
-        
-        // Set up microphone analysis
-        setupMicrophoneAnalysis();
-        
-        // Set up YouTube analysis
-        setupYoutubeAnalysis();
-        
-        // Set up Tunebat analysis
-        setupTunebatAnalysis();
-    }
-
-    // Function to set up tap tempo
-    function setupTapTempo() {
-        const tapButton = document.getElementById('tap-tempo');
-        const clearTapsButton = document.getElementById('clear-taps');
-        const tapInfo = document.querySelector('.tap-info');
-        
-        if (tapButton) {
-            let tapTimes1 = [];
-            
-            tapButton.addEventListener('click', function() {
-
-                const now = Date.now();
-                tapTimes1.push(now);
-                
-                // Only keep the last 8 taps
-                if (tapTimes1.length > 12) {
-                    tapTimes1.shift();
-                }
-                
-                // Calculate BPM if we have at least 4 taps
-                if (tapTimes1.length >= 4) {
-                    const bpm = calculateBPMFromTaps(tapTimes1);
-                    if (bpm) {
-                        document.getElementById("bpm").textContent = Math.round(bpm);
-                        document.getElementById("bpm").setAttribute('data-bpm-display', Math.round(bpm));
-                        tapInfo.textContent = "BPM detected! Keep tapping to refine";
-                        tapInfo.style.display = 'block';
-                        currentBPM = Math.round(bpm);
-                        lastKnownBPM = Math.round(bpm);
-                        // // isCustomBPM = true;
-                        // updateBackgroundColor(bpm); // Use the existing function to update flashing
-                    }
-                } else {
-                    tapInfo.textContent = `Tap at least 4 times, ${4-tapTimes1.length} more taps needed`;
-                    tapInfo.style.display = 'block';
-                }
-
-            });
-            
-            if (clearTapsButton) {
-                clearTapsButton.addEventListener('click', function() {
-                    tapTimes1 = [];
-                    tapInfo.textContent = "Taps cleared. Tap again to detect BPM";
-                    tapInfo.style.display = 'block';
-                });
-            }
-        }
-    }
-
-    // Function to calculate BPM from tap times
-        function calculateBPMFromTaps(tapTimes) {
-        if (tapTimes.length < 2) return null;
-        
-        const intervals = [];
-        for (let i = 1; i < tapTimes.length; i++) {
-            intervals.push(tapTimes[i] - tapTimes[i - 1]);
-        }
-        
-        // Calculate the average interval
-        const sum = intervals.reduce((a, b) => a + b, 0);
-        const avgInterval = sum / intervals.length;
-        
-        // Convert to BPM
-        return 60000 / avgInterval;
-    }
-
-    // Function to set up microphone analysis
-    function setupMicrophoneAnalysis() {
-        const startMicButton = document.getElementById('start-mic');
-        const stopMicButton = document.getElementById('stop-mic');
-        const micStatus = document.querySelector('.mic-status');
-        const thresholdSlider = document.getElementById('threshold-slider');
-        const thresholdValue = document.getElementById('threshold-value');
-        const beatFlashToggle = document.getElementById('beat-flash-toggle');
-        const stableBpmToggle = document.getElementById('stable-bpm-toggle');
-        const volumeGainSlider = document.getElementById('volume-gain-slider');
-        const volumeGainValue = document.getElementById('volume-gain-value');
-        
-        if (!startMicButton || !stopMicButton) return;
-        
-        // Set up threshold slider
-        if (thresholdSlider && thresholdValue) {
-            thresholdSlider.value = beatThreshold;
-            thresholdValue.textContent = beatThreshold.toFixed(2);
-            
-            thresholdSlider.addEventListener('input', function() {
-                beatThreshold = parseFloat(this.value);
-                thresholdValue.textContent = beatThreshold.toFixed(2);
-            });
-        }
-        
-        // Set up volume gain slider
-        if (volumeGainSlider && volumeGainValue) {
-            volumeGainSlider.value = volumeGain;
-            volumeGainValue.textContent = volumeGain.toFixed(2);
-            
-            volumeGainSlider.addEventListener('input', function() {
-                volumeGain = parseFloat(this.value);
-                volumeGainValue.textContent = volumeGain.toFixed(2);
-                
-                // Update gain node if active
-                if (gainNode) {
-                    gainNode.gain.value = volumeGain;
-                }
-            });
-        }
-        
-        // Set up beat flash toggle
-        if (beatFlashToggle) {
-            beatFlashToggle.checked = flashOnBeat;
-            
-            beatFlashToggle.addEventListener('change', function() {
-                flashOnBeat = this.checked;
-            });
-        }
-        
-        // Set up stable BPM toggle
-        if (stableBpmToggle) {
-            stableBpmToggle.checked = stableBpmUpdates;
-            
-            stableBpmToggle.addEventListener('change', function() {
-                stableBpmUpdates = this.checked;
-                if (!stableBpmUpdates) {
-                    lastBpmUpdateTime = 0; // Allow immediate update if disabled
-                }
-            });
-        }
-        
-        // Add BPM display near waveform
-        const waveformContainer = document.querySelector('.waveform-container');
-        if (waveformContainer && !document.querySelector('.bpm-display-confirmation')) {
-            const bpmDisplay = document.createElement('div');
-            bpmDisplay.className = 'bpm-display-confirmation';
-            bpmDisplay.textContent = 'BPM: --';
-            waveformContainer.appendChild(bpmDisplay);
-        }
-        
-        startMicButton.addEventListener('click', async function() {
-            await startMicrophoneAnalysis();
-            startMicButton.disabled = true;
-            stopMicButton.disabled = false;
-            micStatus.textContent = "Analyzing audio...";
-        });
-        
-        stopMicButton.addEventListener('click', function() {
-            stopMicrophoneAnalysis();
-            startMicButton.disabled = false;
-            stopMicButton.disabled = true;
-            micStatus.textContent = "Analysis stopped";
-        });
-    }
-
-    // Function to set up YouTube analysis
-    function setupYoutubeAnalysis() {
-        const youtubeSection = document.querySelector('.youtube-input');
-        if (!youtubeSection) return;
-        
-        const urlInput = youtubeSection.querySelector('.bpm-input');
-        const analyzeButton = youtubeSection.querySelector('.analyze-btn');
-        const infoDiv = youtubeSection.querySelector('.youtube-info');
-        const progressBar = youtubeSection.querySelector('.progress-bar');
-        
-        if (!analyzeButton || !urlInput || !infoDiv) return;
-        
-        analyzeButton.addEventListener('click', async function() {
-            const youtubeUrl = urlInput.value.trim();
-            
-            if (!youtubeUrl) {
-                infoDiv.textContent = "Please enter a YouTube URL";
-                return;
-            }
-            
-            if (!isValidYoutubeUrl(youtubeUrl)) {
-                infoDiv.textContent = "Invalid YouTube URL format";
-                return;
-            }
-            
-            infoDiv.textContent = "Analyzing... (This may take a minute)";
-            progressBar.style.display = "block";
-            progressBar.innerHTML = ""; // Clear any existing content
-            
-            // Create and add the progress element
-            const progressElement = document.createElement("div");
-            progressElement.style.width = "0%";
-            progressElement.style.height = "100%";
-            progressElement.style.backgroundColor = "rgba(0, 200, 200, 0.7)";
-            progressElement.style.borderRadius = "5px";
-            progressElement.style.transition = "width 0.3s ease";
-            progressBar.appendChild(progressElement);
-            
-            // Simulate progress while waiting for server response
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += 2;
-                progressElement.style.width = Math.min(progress, 95) + "%";
-                if (progress >= 95) clearInterval(progressInterval);
-            }, 300);
-            
-            try {
-                // Use the server endpoint to analyze the YouTube video
-                const response = await fetch(`/analyze-youtube-bpm?url=${encodeURIComponent(youtubeUrl)}`);
-                clearInterval(progressInterval);
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || "Server error");
-                }
-                
-                const data = await response.json();
-                progressElement.style.width = "100%";
-                
-                // Display results
-                infoDiv.innerHTML = `
-                    <p><strong>${data.title}</strong></p>
-                    <p>Detected BPM: ${data.bpm}</p>
-                    <p>Duration: ${Math.floor(data.duration / 60)}:${String(data.duration % 60).padStart(2, '0')}</p>
-                `;
-                
-                // Update the BPM display
-                const bpmElement = document.getElementById("bpm");
-                if (bpmElement) {
-                    bpmElement.textContent = data.bpm;
-                    bpmElement.setAttribute('data-bpm-display', data.bpm);
-                    currentBPM = data.bpm;
-                    lastKnownBPM = data.bpm;
-                    customBPM = data.bpm;
-                    // isCustomBPM = true; // Enable custom BPM mode
-                    
-                    // // Update background color based on BPM
-                    // updateBackgroundColor(data.bpm);
-                }
-                
-                setTimeout(() => {
-                    progressBar.style.display = "none";
-                }, 1000);
-                
-            } catch (error) {
-                clearInterval(progressInterval);
-                console.error("YouTube analysis error:", error);
-                infoDiv.textContent = "Error analyzing video: " + error.message;
-                progressBar.style.display = "none";
-            }
-        });
-    }
-    
-    // Function to validate YouTube URL
-    function isValidYoutubeUrl(url) {
-        // Basic YouTube URL validation - checks for youtube.com or youtu.be
-        const regex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/;
-        return regex.test(url);
-    }
-    
-    // Function to set up Tunebat analysis
-    function setupTunebatAnalysis() {
-        const tunebatSection = document.querySelector('.tunebat-input');
-        if (!tunebatSection) return;
-        
-        const titleInput = tunebatSection.querySelectorAll('.bpm-input')[0];
-        const artistInput = tunebatSection.querySelectorAll('.bpm-input')[1];
-        const searchButton = tunebatSection.querySelector('.analyze-btn');
-        const currentSongButton = tunebatSection.querySelector('.current-song-btn');
-        const infoDiv = tunebatSection.querySelector('.tunebat-info');
-        const progressBar = tunebatSection.querySelector('.progress-bar');
-        
-        if (!searchButton || !titleInput || !artistInput || !infoDiv) return;
-        
-        // Add a note about using Google Search
-        const googleSearchNote = document.createElement('p');
-        googleSearchNote.textContent = 'This method uses Google Search to find BPM information.';
-        googleSearchNote.style.fontSize = '12px';
-        googleSearchNote.style.opacity = '0.8';
-        googleSearchNote.style.marginTop = '5px';
-        
-        // Insert the note after the inputs
-        tunebatSection.insertBefore(googleSearchNote, infoDiv);
-        
-        // Add event listener for the "Use Current Song" button
-        if (currentSongButton) {
-            currentSongButton.addEventListener('click', function() {
-                if (lastKnownSongDetails && lastKnownSongDetails !== "N/A") {
-                    populateTunebatFields(lastKnownSongDetails);
-                } else {
-                    infoDiv.textContent = "No current song playing";
-                }
-            });
-        }
-        
-        searchButton.addEventListener('click', async function() {
-            const songTitle = titleInput.value.trim();
-            const artist = artistInput.value.trim();
-            
-            if (!songTitle || !artist) {
-                infoDiv.textContent = "Please enter both song title and artist";
-                return;
-            }
-            
-            // Clear any existing BPM option buttons before starting a new search
-            clearBpmOptionButtons();
-            
-            infoDiv.textContent = "Searching Tunebat...";
-            progressBar.style.display = "block";
-            progressBar.innerHTML = ""; // Clear any existing content
-            
-            // Create and add the progress element
-            const progressElement = document.createElement("div");
-            progressElement.style.width = "0%";
-            progressElement.style.height = "100%";
-            progressElement.style.backgroundColor = "rgba(0, 200, 200, 0.7)";
-            progressElement.style.borderRadius = "5px";
-            progressElement.style.transition = "width 0.3s ease";
-            progressBar.appendChild(progressElement);
-            
-            // Simulate progress
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += 10;
-                progressElement.style.width = Math.min(progress, 90) + "%";
-                if (progress >= 90) clearInterval(progressInterval);
-            }, 200);
-            
-            try {
-                // Use the server endpoint to search Tunebat
-                const response = await fetch(`/search-tunebat?title=${encodeURIComponent(songTitle)}&artist=${encodeURIComponent(artist)}`);
-                clearInterval(progressInterval);
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || "Server error");
-                }
-                
-                const data = await response.json();
-                progressElement.style.width = "100%";
-                
-                // Check if the BPM was found or not
-                if (data.bpm === 'N/A' || !data.success) {
-                    infoDiv.innerHTML = `
-                        <p><strong>${data.title} by ${data.artist}</strong></p>
-                        <p>BPM: Not found</p>
-                        <p>No BPM data found via Google search</p>
-                    `;
-                } else {
-                    // Include confidence if available
-                    const confidenceInfo = data.confidence ? ` (confidence: ${data.confidence}%)` : '';
-                    
-                    // Display results
-                    infoDiv.innerHTML = `
-                        <p><strong>${data.title} by ${data.artist}</strong></p>
-                        <p>BPM: ${data.bpm}${confidenceInfo}</p>
-                        <p>Found via Google search</p>
-                    `;
-                    
-                    // Update the BPM display
-                    const bpmElement = document.getElementById("bpm");
-                    if (bpmElement) {
-                        bpmElement.textContent = data.bpm;
-                        bpmElement.setAttribute('data-bpm-display', data.bpm);
-                        currentBPM = data.bpm;
-                        lastKnownBPM = data.bpm;
-                        
-                        // Update background color based on BPM
-                        updateBackgroundColor(data.bpm);
-                        updateTransition();
-                        
-                        // Display BPM cluster options if available
-                        if (data.bpm_clusters && data.bpm_clusters.length > 0) {
-                            displayBpmOptionButtons(data.bpm_clusters, data.bpm);
-                        }
-                    }
-                }
-                
-                setTimeout(() => {
-                    progressBar.style.display = "none";
-                }, 1000);
-                
-            } catch (error) {
-                clearInterval(progressInterval);
-                console.error("Tunebat search error:", error);
-                infoDiv.textContent = "Error searching: " + error.message;
-                progressBar.style.display = "none";
-            }
-        });
-    }
-    
-    // Simple string hash function for demonstration purposes
-    function hashCode(str) {
-        let hash = 0;
-        if (str.length === 0) return hash;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32bit integer
-        }
-        return Math.abs(hash);
-    }
-
-     // Start microphone analysis
-     async function startMicrophoneAnalysis() {
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256; // Small enough for efficiency
-            
-            // Create gain node for volume control
-            gainNode = audioContext.createGain();
-            gainNode.gain.value = volumeGain;
-            
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false
-                }
-            });
-            
-            microphone = audioContext.createMediaStreamSource(stream);
-            
-            // Connect microphone -> gain -> analyser
-            microphone.connect(gainNode);
-            gainNode.connect(analyser);
-            
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
-            peakTimes = [];
-            bpmHistory = [];
-            startTime = Date.now();
-            lastPeakTime = 0;
-            
-            // Start the analysis loop
-            microphoneActive = true;
-            setupWaveformCanvas();
-            requestAnimationFrame(analyzeAudio);
-            
-            // Set isCustomBPM to true to use microphone-detected BPM
-            // isCustomBPM = true;
-        } catch (error) {
-            console.error("Error accessing microphone:", error);
-            const micStatus = document.querySelector('.mic-status');
-            if (micStatus) {
-                micStatus.textContent = "Error: Could not access microphone";
-            }
-        }
-    }
-
-    // Stop microphone analysis
-    function stopMicrophoneAnalysis() {
-        if (audioContext) {
-            if (microphone) {
-                microphone.disconnect();
-                microphone = null;
-            }
-            
-            if (gainNode) {
-                gainNode.disconnect();
-                gainNode = null;
-            }
-            
-            if (animationFrame) {
-                cancelAnimationFrame(animationFrame);
-                animationFrame = null;
-            }
-            
-            microphoneActive = false;
-            
-            // Close the audio context to release resources
-            if (audioContext.state !== 'closed') {
-                audioContext.close().then(() => {
-                    audioContext = null;
-                    analyser = null;
-                }).catch(err => console.error("Error closing audio context:", err));
-            }
-        }
-    }
-
-    // Setup canvas for waveform display
-    function setupWaveformCanvas() {
-        const canvas = document.getElementById('waveformCanvas');
-        if (!canvas) return;
-        
-        // Set canvas dimensions
-        const container = canvas.parentElement;
-        canvas.width = container.offsetWidth;
-        canvas.height = container.offsetHeight;
-        
-        // Clear the canvas
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-
-    // Analyze audio from microphone
-    function analyzeAudio() {
-        if (!microphoneActive || !analyser) {
-            return;
-        }
-        
-        analyser.getByteTimeDomainData(dataArray);
-        
-        // Calculate volume level
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-            const value = (dataArray[i] - 128) / 128;
-            sum += value * value;
-        }
-        const volume = Math.sqrt(sum / dataArray.length);
-        
-        // Draw waveform
-        drawWaveform(volume);
-        
-        // Detect beats
-        detectBeats(volume);
-        
-        // Continue the loop
-        animationFrame = requestAnimationFrame(analyzeAudio);
-    }
-
-    // Draw the audio waveform
-    function drawWaveform(volume) {
-        const canvas = document.getElementById('waveformCanvas');
-        if (!canvas) return;
-        
-        const ctx = canvas.getContext('2d');
-        const width = canvas.width;
-        const height = canvas.height;
-        
-        // Clear the canvas
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-        ctx.fillRect(0, 0, width, height);
-        
-        // Draw the waveform
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = volume > beatThreshold ? '#00FFFF' : '#00AAAA';
-        ctx.beginPath();
-        
-        const sliceWidth = width / dataArray.length;
-        let x = 0;
-        
-        for (let i = 0; i < dataArray.length; i++) {
-            const v = dataArray[i] / 128.0;
-            const y = v * height / 2;
-            
-            if (i === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-            
-            x += sliceWidth;
-        }
-        
-        ctx.stroke();
-        
-        // Draw volume meter
-        ctx.fillStyle = volume > beatThreshold ? 'rgba(0, 255, 255, 0.7)' : 'rgba(0, 170, 170, 0.5)';
-        ctx.fillRect(0, height - 5, volume * width, 5);
-        
-        // Draw threshold line
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.beginPath();
-        ctx.moveTo(beatThreshold * width, 0);
-        ctx.lineTo(beatThreshold * width, height);
-        ctx.stroke();
-    }
-
-    // Detect beats from audio data
-    function detectBeats(volume) {
-        const now = Date.now();
-        const micStatus = document.querySelector('.mic-status');
-        const waveformContainer = document.querySelector('.waveform-container');
-        const bpmDisplayConfirmation = document.querySelector('.bpm-display-confirmation');
-        
-        // Simple beat detection by threshold crossing
-        if (volume > beatThreshold && now - lastPeakTime > 200) { // Minimum 200ms between beats to avoid double-triggering
-            lastPeakTime = now;
-            peakTimes.push(now);
-            
-            // Visual feedback for beat detection
-            if (waveformContainer) {
-                waveformContainer.classList.add('beat');
-                setTimeout(() => {
-                    waveformContainer.classList.remove('beat');
-                }, 100);
-            }
-            
-            // If flashOnBeat is enabled, flash on every detected beat
-            if (flashOnBeat) {
-                // Use random color from the current color palette for immediate visual feedback
-                const colors = customFlashingColors.length > 0 ? customFlashingColors : savedExtractedColors;
-                if (colors && colors.length > 0) {
-                    const randomColor = colors[Math.floor(Math.random() * colors.length)];
-                    document.body.style.backgroundColor = randomColor;
-                    sendColorToSecondary(randomColor);
-                }
-            }
-            
-            // Keep only the last 30 seconds of peaks
-            const thirtySecondsAgo = now - 30000;
-            while (peakTimes.length > 0 && peakTimes[0] < thirtySecondsAgo) {
-                peakTimes.shift();
-            }
-            
-            // Calculate BPM once we have enough peaks
-            if (peakTimes.length >= 4) {
-                const intervals = [];
-                for (let i = 1; i < peakTimes.length; i++) {
-                    intervals.push(peakTimes[i] - peakTimes[i - 1]);
-                }
-                
-                // Use the median interval to filter out outliers
-                intervals.sort((a, b) => a - b);
-                const medianInterval = intervals[Math.floor(intervals.length / 2)];
-                
-                // Filter intervals close to the median
-                const validIntervals = intervals.filter(interval => 
-                    Math.abs(interval - medianInterval) / medianInterval < 0.3
-                );
-                
-                if (validIntervals.length > 0) {
-                    // Calculate average of valid intervals
-                    const avgInterval = validIntervals.reduce((a, b) => a + b, 0) / validIntervals.length;
-                    const calculatedBPM = Math.round(60000 / avgInterval);
-                    
-                    // Only accept reasonable BPM values
-                    if (calculatedBPM >= 60 && calculatedBPM <= 200) {
-                        bpmHistory.push(calculatedBPM);
-                        
-                        // Keep history manageable
-                        if (bpmHistory.length > 10) {
-                            bpmHistory.shift();
-                        }
-                        
-                        // Calculate the average BPM
-                        const avgBPM = Math.round(bpmHistory.reduce((a, b) => a + b, 0) / bpmHistory.length);
-                        
-                        // Only update BPM if stable updates are disabled or if it's time for an update
-                        const shouldUpdateBPM = !stableBpmUpdates || (now - lastBpmUpdateTime >= bpmUpdateInterval);
-                        
-                        if (shouldUpdateBPM) {
-                            lastBpmUpdateTime = now;
-                            
-                            // Update the BPM display
-                            const bpmElement = document.getElementById("bpm");
-                            if (bpmElement) {
-                                bpmElement.textContent = avgBPM;
-                                bpmElement.setAttribute('data-bpm-display', avgBPM);
-                                // Set customBPM and lastKnownBPM for use in other parts of the app
-                                customBPM = avgBPM;
-                                currentBPM = avgBPM;
-                                lastKnownBPM = avgBPM;
-                                
-                                // Update the custom BPM input field for reference
-                                const customBPMInput1 = document.getElementById("custom-bpm-input");
-                                if (customBPMInput1) {
-                                    customBPMInput1.value = avgBPM;
-                                }
-                                
-                                // Update background color based on BPM only if not in flashOnBeat mode
-                                if (!flashOnBeat) {
-                                    updateBackgroundColor(avgBPM);
-                                }
-                            }
-                            
-                            // Update the BPM display near the waveform
-                            if (bpmDisplayConfirmation) {
-                                bpmDisplayConfirmation.textContent = `BPM: ${avgBPM}`;
-                            }
-                        }
-                        
-                        // Always update confidence in status
-                        if (micStatus) {
-                            const confidence = Math.min(100, Math.round((validIntervals.length / intervals.length) * 100));
-                            const timeToNextUpdate = stableBpmUpdates ? 
-                                Math.max(0, Math.round((bpmUpdateInterval - (now - lastBpmUpdateTime)) / 1000)) : 0;
-                            
-                            micStatus.textContent = `BPM: ${avgBPM} (${confidence}% confidence)` + 
-                                (stableBpmUpdates && timeToNextUpdate > 0 ? ` - Update in ${timeToNextUpdate}s` : '');
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // Function to get a cookie value by name
     function getCookie(name) {
@@ -989,7 +224,7 @@ document.addEventListener("DOMContentLoaded", function () {
     // Function to periodically check if playback is active
     async function checkPlaybackStatus() {
       if(!isTokenExpired && !(isCustomBPM || customTrackURL)){
-//        isPlaying = await isPlaybackActive();
+        isPlaying = await isPlaybackActive();
         console.log('Playback is active: ', isPlaying);
       }else{
         isPlaying=false;
@@ -999,11 +234,11 @@ document.addEventListener("DOMContentLoaded", function () {
     
     // Initialize isPlaying variable and perform initial check
     (async () => {
-//        isPlaying = await isPlaybackActive();
+        isPlaying = await isPlaybackActive();
         console.log('Playback is active:', isPlaying);
       
         const interval = setInterval(async () => {
-            // checkPlaybackStatus();
+            checkPlaybackStatus();
             updateBPMOverlay();
         }, 30000);
     })();
@@ -1059,15 +294,20 @@ document.addEventListener("DOMContentLoaded", function () {
         
     // Function to fetch the BPM from Spotify using the access token
     async function fetchBPMFromSpotify(accessToken) {
+        console.log('🎵 [BPM-Client] Starting BPM fetch from Spotify');
         if (isTokenExpired) {
+            console.log('🔄 [BPM-Client] Token expired, attempting refresh...');
           await checkAndRefreshToken();
           if(isTokenExpired){
+                console.error('❌ [BPM-Client] Token refresh failed');
             handleTokenExpiration();
             Promise.resolve(0);
             return 0;
           }
+            console.log('✅ [BPM-Client] Token refreshed successfully');
         }
         try {
+            console.log('🔍 [BPM-Client] Fetching currently playing track...');
             const response = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
                 method: "GET",
                 headers: {
@@ -1078,41 +318,81 @@ document.addEventListener("DOMContentLoaded", function () {
             if (response.status === 401) {
                 await checkAndRefreshToken();
                 await fetchBPMFromSpotify(accessToken);
-                // // Access token has expired or not provided
-                // handleTokenExpiration();
-                // console.log("Access token expired.");
-                // isTokenExpired = true;
-                // return 0;
             }
 
             const data = await response.json();
 
             if (data.item && data.item.id) {
-                // Fetch audio features for the currently playing track
-                const audioFeaturesResponse = await fetch(`https://api.spotify.com/v1/audio-features/${data.item.id}`, {
+                console.log('✅ [BPM-Client] Current track data received:', data.item.name);
+                
+                // Get track details
+                console.log('🎵 [BPM-Client] Getting track details for:', data.item.name);
+                const trackResponse = await fetch(`https://api.spotify.com/v1/tracks/${data.item.id}`, {
                     method: "GET",
                     headers: {
                         "Authorization": `Bearer ${accessToken}`,
                     },
                 });
 
-                const audioFeatures = await audioFeaturesResponse.json();
+                const trackData = await trackResponse.json();
+                console.log('✅ [BPM-Client] Track details received');
+                console.log('🔍 [BPM-Client] Preview URL:', trackData.preview_url || 'Not available');
 
-                if (audioFeatures.tempo) {
-                    // Reset the token expiration flag
-                    isTokenExpired = false;
-                    return audioFeatures.tempo;
-                } else {
-                    return 0;
-                }
-            } else {
-                // No currently playing track, or data is missing
+                // If preview URL is not available, use AI analysis
+                if (!trackData.preview_url) {
+                    console.log('❌ [BPM-Client] No preview URL available for track');
+                    console.log('⚠️ [BPM-Client] Falling back to AI analysis');
+                    
+                    try {
+                        const aiResponse = await fetch('/analyze-bpm-ai', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                trackName: data.item.name,
+                                artistName: data.item.artists.map(a => a.name).join(', ')
+                            }),
+                        });
+
+                        if (!aiResponse.ok) {
+                            throw new Error(`AI analysis failed: ${aiResponse.status}`);
+                        }
+
+                        const aiData = await aiResponse.json();
+                        console.log('✅ [BPM-Client] AI analysis complete. BPM:', aiData.bpm);
+                        return aiData.bpm;
+                    } catch (error) {
+                        console.error('❌ [BPM-Client] AI analysis error:', error);
                 return 0;
+                    }
+                }
+
+                // If preview URL is available, use audio analysis
+                console.log('🎵 [BPM-Client] Using audio analysis');
+                const bpmResponse = await fetch('/analyze-bpm', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        previewUrl: trackData.preview_url
+                    }),
+                });
+
+                if (!bpmResponse.ok) {
+                    throw new Error(`BPM analysis failed: ${bpmResponse.status}`);
+                }
+
+                const bpmData = await bpmResponse.json();
+                console.log('✅ [BPM-Client] Audio analysis complete. BPM:', bpmData.bpm);
+                return bpmData.bpm;
             }
         } catch (error) {
-            console.error("Error fetching BPM from Spotify:", error);
-            return 0;
+            console.error('❌ [BPM-Client] Error:', error);
         }
+        console.warn('⚠️ [BPM-Client] Falling back to BPM value of 0');
+            return 0;
     }
 
     // Function to fetch the song title from Spotify using the access token
@@ -1340,25 +620,70 @@ wait7Seconds().then((value) => {
   
     // Function to fetch BPM from a custom track URL
     async function fetchBPMFromCustomTrackURL(trackURL) {
+        console.log('🎵 [BPM-Client] Starting BPM fetch for custom track URL');
         try {
             // Extract the track ID from the Spotify URL
             const trackId = extractTrackIdFromURL(trackURL);
-            console.log(trackId);
+            console.log('🔍 [BPM-Client] Extracted track ID:', trackId);
+
             if (trackId) {
-                // Fetch audio features for the track from the Spotify Web API
-                const audioFeatures = await fetchAudioFeatures(trackId, accessToken);
+                console.log('🎵 [BPM-Client] Fetching track details...');
+                // Get track details including preview URL
+                const trackResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+                    method: "GET",
+                    headers: {
+                        "Authorization": `Bearer ${accessToken}`,
+                    },
+                });
 
-                // Extract the BPM from the audio features
-                const bpm = audioFeatures.tempo || "N/A";
+                if (!trackResponse.ok) {
+                    console.error('❌ [BPM-Client] Failed to fetch track details:', trackResponse.status);
+                    return "N/A";
+                }
 
-                return bpm;
+                const trackData = await trackResponse.json();
+                console.log('✅ [BPM-Client] Track details received for:', trackData.name);
+                console.log('🔍 [BPM-Client] Preview URL:', trackData.preview_url ? 'Available' : 'Not available');
+                
+                if (trackData.preview_url) {
+                    console.log('📤 [BPM-Client] Sending preview URL to backend for analysis...');
+                    // Send preview URL to our backend for BPM analysis
+                    const bpmResponse = await fetch('/analyze-bpm', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ previewUrl: trackData.preview_url }),
+                    });
+
+                    if (!bpmResponse.ok) {
+                        console.error('❌ [BPM-Client] BPM analysis request failed:', bpmResponse.status);
+                        const errorData = await bpmResponse.json();
+                        console.error('Error details:', errorData);
+                        return "N/A";
+                    }
+
+                    const bpmData = await bpmResponse.json();
+                    console.log('✅ [BPM-Client] BPM analysis completed');
+                    console.log('🎵 [BPM-Client] Detected BPM:', bpmData.bpm);
+                    console.log('📊 [BPM-Client] Analysis details:', bpmData.analysisDetails);
+                    return bpmData.bpm || "N/A";
             } else {
-                console.error("Invalid Spotify Track URL.");
+                    console.error('❌ [BPM-Client] No preview URL available for track');
+                    console.log('❌ [BPM-Client] No preview URL available, using AI analysis');
+                    const bpm = await getBPMFromAI(trackData.name, trackData.artists.map(a => a.name).join(', '));
+                    return bpm || "N/A";
+                }
+            } else {
+                console.error("❌ [BPM-Client] Invalid Spotify Track URL");
                 showAlert("Invalid Spotify Track URL.");
                 return "N/A";
             }
         } catch (error) {
-            console.error("Error fetching BPM from Custom Track URL:", error);
+            console.error("❌ [BPM-Client] Error fetching BPM from Custom Track URL:", error);
+            console.error('   - Error name:', error.name);
+            console.error('   - Error message:', error.message);
+            console.error('   - Stack trace:', error.stack);
             return "N/A";
         }
     }
@@ -1379,16 +704,14 @@ wait7Seconds().then((value) => {
     // Function to fetch audio features for a track from the Spotify Web API
     async function fetchAudioFeatures(trackId, accessToken) {
         try {
-        //     const response = await fetch(`https://api.spotify.com/v1/audio-features/${trackId}`, {
-        //         method: "GET",
-        //         headers: {
-        //             "Authorization": `Bearer ${accessToken}`,
-        //         },
-        //     });
+            const response = await fetch(`https://api.spotify.com/v1/audio-features/${trackId}`, {
+                method: "GET",
+                headers: {
+                    "Authorization": `Bearer ${accessToken}`,
+                },
+            });
 
-                    const data = await fetchBPMFromTunebat(document.getElementById("tunebat-title").value, document.getElementById("tunebat-artist").value);
-            data.tempo = data.bpm;
-
+            const data = await response.json();
             return data;
         } catch (error) {
             console.error("Error fetching audio features:", error);
@@ -1428,17 +751,17 @@ wait7Seconds().then((value) => {
   
             if (isCustomBPM) {
                 // Use the custom BPM if set
-                bpm = customBPM == 0 ? Math.round(document.getElementById("bpm").textContent.trim()) : customBPM;
+                bpm = customBPM;
                 lastKnownBPM = bpm;
-                // // Hide the "Now Playing" indicator when using custom BPM
-                // document.getElementById("now-playing").style.display = "none";
-                // document.getElementById("skip-mode-container").style.display = "none";
-              let multipliedBPM = bpmMultiplier * lastKnownBPM;
-              if(multipliedBPM !== lastBPMMultiplied){
+                // Hide the "Now Playing" indicator when using custom BPM
+                document.getElementById("now-playing").style.display = "none";
+                document.getElementById("skip-mode-container").style.display = "none";
+            let multipliedBPM = +(bpmMultiplier * lastKnownBPM).toFixed(2); // Always keep at most 2 decimals
+            if (multipliedBPM !== lastBPMMultiplied) {
                 lastBPMMultiplied = multipliedBPM;
                 updateBackgroundColor(lastBPMMultiplied);
                 bpmElement.textContent = lastBPMMultiplied;
-              }
+            }
                 // Update the "Switch to Currently Playing" button
                 updateSwitchToCurrentlyPlayingButton();
                 if (customTrackURL === "") {
@@ -1456,9 +779,6 @@ wait7Seconds().then((value) => {
                             if(songTitle !== lastKnownSongDetails){
                             songTitleElement.textContent = songTitle;
                             lastKnownSongDetails = songTitle;
-                            
-                            // Update Tunebat fields when using custom track URL
-                            populateTunebatFields(songTitle);
                             }
                         } else {
                             songTitle = "N/A";
@@ -1503,7 +823,7 @@ wait7Seconds().then((value) => {
 
                     try{
                         if(songTitle!=="custom" && songTitle!=="N/A" && isSkipping && bpmMultiplier == 0){
-                        bpm = Math.round(document.getElementById("bpm").textContent.trim()); //await fetchBPMFromSpotify(accessToken);
+                        bpm = await fetchBPMFromSpotify(accessToken);
                         lastKnownBPM = bpm;
                           songAndBPMUpdated=true;
                           
@@ -1517,15 +837,9 @@ wait7Seconds().then((value) => {
                       
                   }
               lastKnownSongDetails = songTitle;
-                          
-                          // Update Tunebat fields with the new song details
-                          populateTunebatFields(songTitle);
-                          
                           if (songAndBPMUpdated) {
                         // Call the function to listen for song changes
-                        if(parseFloat(document.getElementById("bpm").textContent.trim()) !== 0){
                         listenForSongChanges();
-                        }
                         autoSaveLastSongDetails = lastKnownSongDetails;
                         autoSaveLastBPM = lastKnownBPM;
                         autoSaveLastSongUrl = currentSongUrl;
@@ -1553,11 +867,11 @@ wait7Seconds().then((value) => {
             }
 
           
-            let multipliedBPM = bpmMultiplier * lastKnownBPM;
-            if(multipliedBPM !== lastBPMMultiplied){
-              lastBPMMultiplied = multipliedBPM;
-              updateBackgroundColor(lastBPMMultiplied);
-              bpmElement.textContent = lastBPMMultiplied;
+            let multipliedBPM = +(bpmMultiplier * lastKnownBPM).toFixed(2); // Always keep at most 2 decimals
+            if (multipliedBPM !== lastBPMMultiplied) {
+                lastBPMMultiplied = multipliedBPM;
+                updateBackgroundColor(lastBPMMultiplied);
+                bpmElement.textContent = lastBPMMultiplied;
             }
           
     console.log("skip is checking");
@@ -1969,21 +1283,21 @@ skipModeDropdown.addEventListener("change", () => {
         }
     }
 
-    // switchToCurrentlyPlayingButton.addEventListener("click", function () {
-    //     // Clear custom BPM and custom track URL
-    //     customBPM = 0;
-    //     customTrackURL = "";
-    //     // isCustomBPM = false;
-    //     document.getElementById("toggle-container").style.display = "flex";
-    //     enableElements(".playback-controls")
+    switchToCurrentlyPlayingButton.addEventListener("click", function () {
+        // Clear custom BPM and custom track URL
+        customBPM = 0;
+        customTrackURL = "";
+        isCustomBPM = false;
+        document.getElementById("toggle-container").style.display = "flex";
+        enableElements(".playback-controls")
 
-    //     // Disable the "Switch to Currently Playing" button
-    //     switchToCurrentlyPlayingButton.disabled = true;
-    //     getBackToInternalColors();
-    //     // Update the BPM overlay and fetch the currently playing song
-    //     lastKnownSongDetails= "";
-    //     updateBPMOverlay();
-    // });
+        // Disable the "Switch to Currently Playing" button
+        switchToCurrentlyPlayingButton.disabled = true;
+        getBackToInternalColors();
+        // Update the BPM overlay and fetch the currently playing song
+        lastKnownSongDetails= "";
+        updateBPMOverlay();
+    });
 
     async function getBackToInternalColors(){
       try{
@@ -1998,55 +1312,43 @@ skipModeDropdown.addEventListener("change", () => {
       }
     }
   
-    // Global variable to track the current color index position
-    let globalColorIndex = 0;
-    let oldCI = 0;
-    
-    // Global variables for color management
-    let changeColorFunction;
-    
-    // Create a reusable changeColor function
-    function createChangeColorFunction() {
-        return async function() {
-            const body = document.body;
-  let rand = document.getElementById("extract-toggle1").checked;
-          if(subCode){
-                await sendColorToSecondary(customFlashingColors[globalColorIndex]);
-            }
-            body.style.backgroundColor = customFlashingColors[globalColorIndex];
-            oldCI = globalColorIndex;
-            
-          // if random is true then make colour index some random number from custom flashing colours length
-          if(rand){
-                while(globalColorIndex == oldCI){
-                    globalColorIndex = Math.floor(Math.random() * customFlashingColors.length);
-            }
-          }else{
-                globalColorIndex = (globalColorIndex + 1) % customFlashingColors.length;
-            }
-        };
-    }
-    
     // Function to update the background color based on BPM
     function updateBackgroundColor(bpm) {
         const body = document.body;
-        
-        // Update base BPM in our tempo control system
-        baseBPM = bpm;
-        tempoMultiplier = 1;
     
+        let colorIndex = 0;
+
         // Calculate interval in ms (BPM is beats per minute, so we convert it to beats per second)
         const interval = 60 / bpm * 1000;
-    
-        // Create the shared change color function
-        changeColorFunction = createChangeColorFunction();
+
+        // Set up color flashing
+        async function changeColor() {
+  let rand = document.getElementById("extract-toggle1").checked;
+          if(subCode){
+            await sendColorToSecondary(customFlashingColors[colorIndex]);
+          }
+            body.style.backgroundColor = customFlashingColors[colorIndex];
+            //body.style.transition= "background-color 0 ease";
+            oldCI=colorIndex;
+          // if random is true then make colour index some random number from custom flashing colours length
+          if(rand){
+            while(colorIndex==oldCI){
+            colorIndex = Math.floor(Math.random() * customFlashingColors.length);
+            }
+          }else{
+            colorIndex = (colorIndex + 1) % customFlashingColors.length;
+          }
+
+          // Send the color change to the /secondary route
+          
+        }
 
         // Clear the previous interval (if any) to avoid multiple flashing intervals
         clearInterval(body.intervalId);
 
         // Check if the BPM is valid and not 0 or N/A
         if (bpm > 0) {
-            body.intervalId = setInterval(changeColorFunction, interval);
+            body.intervalId = setInterval(changeColor, interval);
         } else {
             body.style.backgroundColor = "#424242";
             // Stop flashing if BPM is 0 or N/A
@@ -2077,32 +1379,8 @@ async function sendOverlayData() {
   if(!oldoverlay){
     oldoverlay=overlayElement.innerHTML;
   }
-  
-  // Always refresh when using microphone to show current BPM
-  const shouldUpdate = (overlayElement.innerHTML !== oldoverlay) || microphoneActive;
-  
-  if(shouldUpdate){
+  if((overlayElement.innerHTML)!==oldoverlay){
     let overlayHTML = overlayElement.innerHTML;
-
-    // Add microphone status if active
-    if (microphoneActive) {
-        const micStatusElement = document.querySelector('.mic-status');
-        const bpmDisplayElement = document.querySelector('.bpm-display-confirmation');
-        
-        // Create or update microphone status information
-        let micInfo = '';
-        if (micStatusElement) {
-            micInfo += `<p class="mic-status-mirror">${micStatusElement.textContent}</p>`;
-        }
-        
-        // Add waveform BPM display
-        if (bpmDisplayElement) {
-            micInfo += `<p class="bpm-display-mirror">${bpmDisplayElement.textContent}</p>`;
-        }
-        
-        // Add the microphone info to the overlay
-        overlayHTML += `<div class="microphone-info-mirror">${micInfo}</div>`;
-    }
 
     // Check if currentSongUrl has a value
     if (currentSongUrl) {
@@ -2110,15 +1388,14 @@ async function sendOverlayData() {
         const playButton = `<div id="song-link-btn"><br><button id="song-link" class="hide-ui" style="opacity:0.88;" onclick="window.open('${currentSongUrl}', '_blank')">Play the Song</button></div>`;
         overlayHTML += playButton;
     }
-    
-    oldoverlay = overlayElement.innerHTML;
-    
+    // console.log('Sending overlay data:', overlayHTML);
+oldoverlay=overlayElement.innerHTML;
     fetch(`/saveoverlaydata?code=${encodeURIComponent(subCode)}`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json', // Change content type to JSON
         },
-        body: JSON.stringify({ overlayHTML }),
+        body: JSON.stringify({ overlayHTML }), // Send the data as JSON
     })
         .then(response => response.text())
         .then(data => console.log(data))
@@ -2250,9 +1527,35 @@ function becomeMirror() {
       isTransitionUpdated = true;
     }
 
-    // Add an event listener to the BPM span to trigger slider update when BPM changes
+        // Add an event listener to the BPM span to trigger slider update when BPM changes
     bpmSpan.addEventListener("change", updateTransition);
-
+    // Update balloon BPM display when BPM changes
+    const balloonBPMSpan = document.querySelector("#balloon-bpm");
+    const balloonBPMOriginalSpan = document.querySelector("#balloon-bpm-original");
+    const balloonMultiplierSpan = document.querySelector("#balloon-multiplier");
+    const bpmSpan1 = document.querySelector("#bpm");
+    
+    // Initial sync
+    if (bpmBalloon && balloonBPMSpan && bpmSpan1) {
+        balloonBPMSpan.textContent = bpmSpan1.textContent;
+        balloonBPMOriginalSpan.textContent = lastKnownBPM;
+        balloonMultiplierSpan.textContent = bpmMultiplier % 1 === 0 ? bpmMultiplier.toString().split(".")[0] : bpmMultiplier.toFixed(2);
+    }
+    
+    // Keep in sync when BPM changes
+    const observer = new MutationObserver(() => {
+        if (bpmBalloon && balloonBPMSpan && bpmSpan1) {
+            balloonBPMSpan.textContent = bpmSpan1.textContent;
+            balloonBPMOriginalSpan.textContent = lastKnownBPM;
+            balloonMultiplierSpan.textContent = bpmMultiplier % 1 === 0 ? bpmMultiplier.toString().split(".")[0] : bpmMultiplier.toFixed(2);
+        }
+    });
+    
+    observer.observe(bpmSpan1, {
+        childList: true,
+        characterData: true,
+        subtree: true 
+    });
     
     
   
@@ -2301,13 +1604,13 @@ function becomeMirror() {
     // Event listener for setting a custom BPM
     const setCustomBPMButton = document.getElementById("set-custom-bpm");
     setCustomBPMButton.addEventListener("click", function () {
-        const customBPMInput2 = document.getElementById("custom-bpm-input");
-        const inputBPM = parseFloat(customBPMInput2.value);
+        const customBPMInput = document.getElementById("custom-bpm-input");
+        const inputBPM = parseFloat(customBPMInput.value);
 
         if (!isNaN(inputBPM) && inputBPM > 0) {
             // Set the custom BPM and flag
             customBPM = inputBPM;
-            // // isCustomBPM = true;
+            isCustomBPM = true;
             customTrackURL = "";
             document.getElementById("toggle-container").style.display = "none";
             updateBPMOverlay();
@@ -2329,7 +1632,7 @@ function becomeMirror() {
                 if (!isNaN(bpm) && bpm > 0) {
                     // Set the custom BPM and flag
                     customBPM = bpm;
-                    // // isCustomBPM = true;
+                    isCustomBPM = true;
                     customTrackURL = inputTrackURL;
                     document.getElementById("toggle-container").style.display = "none";
                     fetchAndExtractColorsForTrack(inputTrackURL, accessToken);
@@ -2350,11 +1653,72 @@ function becomeMirror() {
         }
     });
 
-    // Event listeners for tempo multiplier buttons were moved to the modifyTempo() implementation
+    // Event listeners for tempo multiplier buttons
+    const tempoHalfButton = document.getElementById("half-button");
+    tempoHalfButton.addEventListener("click", function () {
+        bpmMultiplier = 0.5;
+        updateBPMOverlay();
+    });
+
+    const tempoDoubleButton = document.getElementById("double-button");
+    tempoDoubleButton.addEventListener("click", function () {
+        bpmMultiplier = 2;
+        updateBPMOverlay();
+    });
+
+    const tempoQuadrupleButton = document.getElementById("quadruple-button");
+    tempoQuadrupleButton.addEventListener("click", function () {
+        bpmMultiplier = 4;
+        updateBPMOverlay();
+    });
+
+    const resetButton = document.getElementById("reset-button");
+    resetButton.addEventListener("click", function () {
+        bpmMultiplier = 1;
+        updateBPMOverlay();
+    });
+
+    // Event listener for the "Stop" button
+    const stopButton = document.getElementById("stop-button");
+    stopButton.addEventListener("click", function () {
+        bpmMultiplier = 0; // Reset the BPM multiplier to 1x
+        updateBPMOverlay();
+    });
+
+        // Additional tempo buttons
+        const tempoOneThirdButton = document.getElementById("one-third-button");
+        const tempoTwoThirdsButton = document.getElementById("two-thirds-button");
+        const tempoThreeQuartersButton = document.getElementById("three-quarters-button");
+        const tempoTwoHalfButton = document.getElementById("two-half-button");
+        const tempoTripleButton = document.getElementById("triple-button");
+        const saveBaseBpmButton = document.getElementById("save-base-bpm");
+
+        
+    // Set bpmMultiplier and update overlay for each button
+    tempoOneThirdButton.addEventListener("click", function() {
+      bpmMultiplier = 1/3;
+      updateBPMOverlay();
+  });
+  tempoTwoThirdsButton.addEventListener("click", function() {
+      bpmMultiplier = 2/3;
+      updateBPMOverlay();
+  });
+  tempoThreeQuartersButton.addEventListener("click", function() {
+      bpmMultiplier = 0.75;
+      updateBPMOverlay();
+  });
+  tempoTwoHalfButton.addEventListener("click", function() {
+      bpmMultiplier = 2.5;
+      updateBPMOverlay();
+  });
+  tempoTripleButton.addEventListener("click", function() {
+      bpmMultiplier = 3;
+      updateBPMOverlay();
+  });        
 
     // Event listener for the "Switch to Currently Playing" button
     switchToCurrentlyPlayingButton.addEventListener("click", function () {
-        // isCustomBPM = false; // Switch to currently playing mode
+        isCustomBPM = false; // Switch to currently playing mode
         updateBPMOverlay(); // Start fetching currently playing BPM
     });
 
@@ -2479,7 +1843,7 @@ submitButton.onclick = function() {
         document.getElementById('login-message').style.display = 'block';
 
         // Set isCustomBPM to true to stop fetching currently playing details
-        // isCustomBPM = true;
+        isCustomBPM = true;
         customBPM = 0;
         lastKnownBPM = 0;
     }
@@ -2627,8 +1991,8 @@ function enableElements(a) {
 
 
         // Event listener for custom BPM input field to work on hitting "Enter"
-    const customBpmInput4 = document.getElementById("custom-bpm-input");
-    customBpmInput4.addEventListener("keydown", function (event) {
+    const customBpmInput = document.getElementById("custom-bpm-input");
+    customBpmInput.addEventListener("keydown", function (event) {
         if (event.key === "Enter") {
             event.preventDefault(); // Prevent the default form submission
             setCustomBPMButton.click(); // Trigger the "Set BPM" button click
@@ -3822,251 +3186,116 @@ function getRandomSeconds(minSeconds, maxSeconds) {
 
 
  // Manual BPM Counter Variables
-// Unified BPM tap system variables
 let tapTimes = [];
 const maxTapInterval = 3000; // Maximum time between taps
-let lastSmoothedBPM;
 
-// Log that the script file is loaded
-console.log("SCRIPT FILE LOADED - DEBUG");
+// Manual BPM Counter Event Listeners
+document.getElementById("manual-bpm-button").addEventListener("click", handleManualBPM);
+document.getElementById("manual-bpm-input").addEventListener("input", handleInput);
+document.getElementById("clear-taps-button").addEventListener("click", clearTaps);
 
-// Always add a window load handler for extra safety
-window.addEventListener("load", function() {
-    console.log("WINDOW FULLY LOADED - DEBUG");
-    setupTapHandlers();
-});
+// // Function to handle manual BPM counter
+// function handleManualBPM() {
+//     const currentTime = new Date().getTime();
+//     tapTimes.push(currentTime);
 
-// Setup event listeners after DOM is loaded
-document.addEventListener("DOMContentLoaded", function() {
-    console.log("DOM CONTENT LOADED - DEBUG");
-    setupTapHandlers();
-});
+//     // Remove taps that are older than the maximum interval
+//     tapTimes = tapTimes.filter((tapTime) => currentTime - tapTime < maxTapInterval);
 
-// Main function to set up all tap handlers
-function setupTapHandlers() {
-    console.log("DOM loaded, setting up unified tap handlers");
+//     // Calculate BPM based on the time between taps
+//     const bpm = calculateBPM(tapTimes);
     
-    // Secondary tap tempo system (the one in the main card)
-    const manualBpmButton = document.getElementById("manual-bpm-button");
-    const manualBpmInput = document.getElementById("manual-bpm-input");
-    const clearTapsButton = document.getElementById("clear-taps-button");
-    
-    // Main UI tap tempo system (in the mode selector)
-    const mainTapButton = document.getElementById("tap-tempo");
-    const mainClearButton = document.getElementById("clear-taps");
-    
-    // Set up SECONDARY tap system button (in the card)
-    if (manualBpmButton) {
-        console.log("Found manual-bpm-button, adding click listener");
-        manualBpmButton.addEventListener("click", function(event) {
-            console.log("SECONDARY TAP BUTTON CLICKED - DEBUG");
-            console.warn("Tap detected!"); // Add an alert for debugging
-            // Create and animate a temporary visual feedback element
-            const tapFeedback = document.createElement('div');
-            tapFeedback.style.cssText = `
-                position: fixed;
-                width: 20px;
-                height: 20px;
-                background: rgba(255, 255, 255, 0.8);
-                border-radius: 50%;
-                pointer-events: none;
-                transform: translate(-50%, -50%);
-                animation: tapFade 0.5s ease-out forwards;
-            `;
+//     // Update the BPM result in the HTML
+//     document.getElementById("custom-bpm-input").value = `${bpm.toFixed(2)}`;
+//         const customBPMInput = document.getElementById("custom-bpm-input");
+//         const inputBPM = parseFloat(customBPMInput.value);
 
-            // Add the animation keyframes if they don't exist
-            if (!document.querySelector('#tapFadeKeyframes')) {
-                const style = document.createElement('style');
-                style.id = 'tapFadeKeyframes';
-                style.textContent = `
-                    @keyframes tapFade {
-                        0% { 
-                            opacity: 1;
-                            transform: translate(-50%, -50%) scale(0.5);
-                        }
-                        100% { 
-                            opacity: 0;
-                            transform: translate(-50%, -50%) scale(2);
-                        }
-                    }
-                `;
-                document.head.appendChild(style);
-            }
+//         if (!isNaN(inputBPM) && inputBPM > 0) {
+//             // Set the custom BPM and flag
+//             customBPM = inputBPM;
+//             isCustomBPM = true;
+//             customTrackURL = "";
+//             document.getElementById("toggle-container").style.display = "none";
+//           if (tapTimes.length === 1 || tapTimes.length === 2) {
+//             updateBPMOverlay();
+//         }
+//         }
+// }
 
-            // Position the feedback element at click location
-            tapFeedback.style.left = event.clientX + 'px';
-            tapFeedback.style.top = event.clientY + 'px';
-
-            // Add to DOM and remove after animation
-            document.body.appendChild(tapFeedback);
-            setTimeout(() => tapFeedback.remove(), 500);
-            handleTapBPM();
-        });
-        console.log("Secondary tap button listener added");
-    } else {
-        console.error("Could not find manual-bpm-button");
-        // Add debug info about all buttons in the document
-        const allButtons = document.querySelectorAll("button");
-        console.log("All buttons on page:", Array.from(allButtons).map(b => b.id || "unnamed button"));
-    }
-    
-    // Set up MAIN tap button (in the mode selector)
-    if (mainTapButton) {
-        mainTapButton.addEventListener("click", function(event) {
-            console.log("Main tap button clicked");
-            handleTapBPM();
-        });
-        console.log("Main tap button listener added");
-    }
-    
-    // Set up keyboard tap handling for SECONDARY input
-    if (manualBpmInput) {
-        manualBpmInput.addEventListener("input", function(event) {
-            console.log("Keyboard tap detected");
-            
-            // Register the tap
-            handleTapBPM();
-            
-            // Prevent the text from being added to the field
-            setTimeout(() => {
-                event.target.value = "";
-                event.target.placeholder = "Use keyboard taps to set BPM";
-            }, 10);
-        });
-        console.log("Keyboard tap listener added");
-    } else {
-        console.error("Could not find manual-bpm-input");
-    }
-    
-    // Set up SECONDARY clear button
-    if (clearTapsButton) {
-        clearTapsButton.addEventListener("click", clearTaps);
-        console.log("Secondary clear button listener added");
-    } else {
-        console.error("Could not find clear-taps-button");
-    }
-    
-    // Set up MAIN clear button
-    if (mainClearButton) {
-        mainClearButton.addEventListener("click", clearTaps);
-        console.log("Main clear button listener added");
-    }
-    
-    // Set up the Set BPM button
-    const setCustomBpmButton = document.getElementById("set-custom-bpm");
-    if (setCustomBpmButton) {
-        setCustomBpmButton.addEventListener("click", function() {
-            const customBpmInput = document.getElementById("custom-bpm-input");
-            if (customBpmInput) {
-                const bpmValue = parseFloat(customBpmInput.value);
-                if (!isNaN(bpmValue) && bpmValue > 0) {
-                    applyCustomBPM(bpmValue);
-                }
-            }
-        });
-    }
+// Function to handle input changes (simulating taps)
+function handleInput() {
+    // Simulate a tap when the input field changes
+    handleManualBPM();
+  document.getElementById("manual-bpm-input").value='';
 }
 
-// This function is now replaced with the inline implementation inside the event listener
-// The old function has been removed to avoid confusion
+// // Function to calculate BPM based on tap times
+// function calculateBPM(tapTimes) {
+//     if (tapTimes.length < 2) {
+//         return 0; // Not enough taps to calculate BPM
+//     }
 
-// Unified tap BPM handler - used by all tap inputs (buttons and keyboard)
-function handleTapBPM() {
-    console.log("Tap detected for BPM calculation");
+//     const averageInterval = tapTimes.reduce((sum, tapTime, index, array) => {
+//         if (index !== 0) {
+//             sum += tapTime - array[index - 1];
+//         }
+//         return sum;
+//     }, 0) / (tapTimes.length - 1);
+
+//     const bpm = 60000 / averageInterval;
+//     return bpm;
+// }
+
+
+
+
+  
+// // Function to clear tap times
+// function clearTaps() {
+//     tapTimes = [];
+//     // Clear the BPM result in the HTML
+//     document.getElementById("custom-bpm-input").value = "";
+//     console.log("Tap data cleared");
+// }
+
+
+
+  let lastSmoothedBPM;
+
+// // Manual BPM Counter Event Listeners
+// document.getElementById("manual-bpm-button").addEventListener("click", handleManualBPM);
+// document.getElementById("manual-bpm-input").addEventListener("input", handleInput);
+// document.getElementById("clear-taps-button").addEventListener("click", clearTaps);
+
+// Function to handle manual BPM counter
+function handleManualBPM() {
     const currentTime = new Date().getTime();
     tapTimes.push(currentTime);
 
     // Remove taps that are older than the maximum interval
     tapTimes = tapTimes.filter((tapTime) => currentTime - tapTime < maxTapInterval);
 
-    // Get the custom BPM input field (define once and reuse)
-    const customBPMInput = document.getElementById("custom-bpm-input");
-    
-    // Need at least 2 taps for a basic calculation, but 5 for optimal results
-    if (tapTimes.length < 2) {
-        // Update the custom BPM input field to show progress
-        if (customBPMInput) {
-            customBPMInput.value = `Tap 1 more time...`;
-        }
-        
-        console.log(`Need 1 more tap for basic BPM calculation`);
-        return;
-    }
-    
-    // Show additional message for optimal results
-    if (tapTimes.length < 5 && customBPMInput) {
-        customBPMInput.value = `Tap ${5 - tapTimes.length} more for accuracy...`;
-    }
-
-    // Calculate raw BPM based on the time between taps
+    // Calculate raw BPM based on the time between taps with averaging every five taps
     const rawBPM = calculateBPM(tapTimes);
 
-    if (rawBPM === 0) {
-        console.log("No valid intervals found");
-        return;
-    }
+    // Calculate smoothed BPM based on the raw BPM
+    const smoothedBPM = calculateSmoothedBPM(rawBPM);
 
-    // Less aggressive smoothing - trust the raw values more
-    let finalBPM;
-    if (lastSmoothedBPM === undefined) {
-        finalBPM = rawBPM; // First valid calculation
-    } else {
-        // Use a simple smoothing with more weight on new reading (80% new, 20% old)
-        finalBPM = (rawBPM * 0.8) + (lastSmoothedBPM * 0.2); 
-    }
-    
-    lastSmoothedBPM = finalBPM;
-    
-    // Round to whole number for display
-    const roundedBPM = Math.round(finalBPM);
-    
-    console.log(`Calculated BPM: ${roundedBPM} (raw: ${rawBPM.toFixed(1)})`);
-    
-    // Update the custom BPM input field with the calculated value
-    if (customBPMInput) {
-        customBPMInput.value = roundedBPM;
-    }
-    
-    // Check if we need to update just the flash rate or do a full BPM change
-    const body = document.body;
-    const isAlreadyFlashing = body.intervalId !== undefined;
-    
-    if (isAlreadyFlashing) {
-        // Only update the interval rate directly without resetting the color sequence
-        clearInterval(body.intervalId);
-        const interval = 60 / roundedBPM * 1000;
-        
-        // Use the shared changeColorFunction
-        body.intervalId = setInterval(changeColorFunction, interval);
-        
-        // Update global BPM variables
-        customBPM = roundedBPM;
-        lastKnownBPM = roundedBPM;
-        currentBPM = roundedBPM;
-        
-        // Update BPM display
-        const bpmDisplay = document.getElementById("bpm");
-        if (bpmDisplay) {
-            bpmDisplay.textContent = Math.round(roundedBPM);
+    // Update the BPM result in the HTML
+    document.getElementById("custom-bpm-input").value = `${smoothedBPM.toFixed(2)}`;
+
+    const customBPMInput = document.getElementById("custom-bpm-input");
+    const inputBPM = parseFloat(customBPMInput.value);
+
+    if (!isNaN(inputBPM) && inputBPM > 0) {
+        // Set the custom BPM and flag
+        customBPM = inputBPM;
+        isCustomBPM = true;
+        customTrackURL = "";
+        document.getElementById("toggle-container").style.display = "none";
+        if (tapTimes.length === 1 || tapTimes.length === 2) {
+            updateBPMOverlay();
         }
-        
-        // Update the transition
-        updateTransition();
-        
-        // Update the document title
-        document.title = `BPM Flash - ${Math.round(roundedBPM)} BPM`;
-    } else {
-        // Apply the BPM normally (first time)
-        applyCustomBPM(roundedBPM);
-    }
-    
-    // Visual feedback on the Set BPM button
-    const setBpmButton = document.getElementById("set-custom-bpm");
-    if (setBpmButton) {
-        setBpmButton.classList.add("active");
-        setTimeout(() => {
-            setBpmButton.classList.remove("active");
-        }, 200);
     }
 }
 
@@ -4076,97 +3305,23 @@ function calculateSmoothedBPM(rawBPM) {
         return rawBPM;
     }
 
-    // Limit how much the BPM can change at once
-    // Only apply smoothing if the change is significant
-    const maxChange = 10; // Maximum allowed change in BPM
-    const diff = Math.abs(rawBPM - lastSmoothedBPM);
-    
-    if (diff > maxChange) {
-        // If change is too large, limit it
-        const direction = rawBPM > lastSmoothedBPM ? 1 : -1;
-        return lastSmoothedBPM + (direction * maxChange);
-    } else {
-        // For small changes, trust the raw value more
-        const smoothingFactor = 0.7; // Higher value means more trust in new measurements
-        const smoothedBPM = rawBPM * smoothingFactor + lastSmoothedBPM * (1 - smoothingFactor);
+    // Use a smoothing factor to dampen sudden changes in BPM
+    const smoothingFactor = 0.1; // Adjust as needed
+    const smoothedBPM = rawBPM * (1 - smoothingFactor) + lastSmoothedBPM * smoothingFactor;
+
     lastSmoothedBPM = smoothedBPM;
+
     return smoothedBPM;
-    }
 }
 
-// Unified function to clear tap data for all tap tempo systems
+// Function to clear tap times
 function clearTaps() {
-    console.log("Clearing all tap data");
-    
-    // Reset the tap times array
     tapTimes = [];
-    
-    // Reset the smoothed BPM
     lastSmoothedBPM = undefined;
 
-    // Clear the custom BPM input field
-    const customBPMInput = document.getElementById("custom-bpm-input");
-    if (customBPMInput) {
-        customBPMInput.value = "";
-        customBPMInput.placeholder = "Enter custom BPM";
-    }
-    
-    // Show feedback in the tap info element if it exists
-    const tapInfo = document.querySelector('.tap-info');
-    if (tapInfo) {
-        tapInfo.textContent = "Taps cleared. Tap again to detect BPM";
-        tapInfo.style.display = 'block';
-    }
-    
-    console.log("All tap data cleared");
-}
-
-// Function to apply the calculated BPM to the app
-function applyCustomBPM(bpmValue) {
-    if (!isNaN(bpmValue) && bpmValue > 0) {
-        // Update the main BPM display
-        const bpmDisplay = document.getElementById("bpm");
-        if (bpmDisplay) {
-            bpmDisplay.textContent = Math.round(bpmValue);
-        }
-        
-        // Update global BPM variables for the application
-        customBPM = bpmValue;
-        lastKnownBPM = bpmValue;
-        currentBPM = bpmValue;
-        // Update the base BPM in our tempo control system
-        baseBPM = bpmValue;
-        tempoMultiplier = 1; // Reset multiplier when setting a new base BPM
-        
-        //isCustomBPM = true;
-        customTrackURL = "";
-        
-        // Clear any BPM option buttons
-        clearBpmOptionButtons();
-        
-        // Get the current interval ID to check if we're already flashing
-        const body = document.body;
-        const isAlreadyFlashing = body.intervalId !== undefined;
-        
-        if (isAlreadyFlashing) {
-            // Just update the interval without resetting colors
-            clearInterval(body.intervalId);
-            const interval = 60 / bpmValue * 1000;
-            body.intervalId = setInterval(changeColorFunction, interval);
-        } else {
-            // Full initialization of color flashing
-            updateBackgroundColor(bpmValue);
-        }
-        
-        updateTransition();
-        
-        // Update the document title to show the BPM
-        document.title = `BPM Flash - ${Math.round(bpmValue)} BPM`;
-        
-        console.log(`BPM applied: ${bpmValue}`);
-    } else {
-        console.log("Invalid BPM value");
-    }
+    // Clear the BPM result in the HTML
+    document.getElementById("custom-bpm-input").value = "";
+    console.log("Tap data cleared");
 }
 
 // Function to calculate BPM based on tap times
@@ -4185,16 +3340,15 @@ function calculateBPM(tapTimes) {
         return sum;
     }, 0) / (numTaps - 1);
 
-    // If there are fewer than five taps, return simple average
-    if (numTaps < 5) {
-        return 60000 / averageInterval;
-    }
-
-    // For 5+ taps, use a more sophisticated approach
     // Initialize an array to store averages of every five taps
     const intervalAverages = [];
 
-    // Calculate the average of every five taps for better stability
+    if (numTaps < 5) {
+        // If there are fewer than five taps, calculate the average for all taps
+        return 60000 / averageInterval;
+    }
+
+    // Calculate the average of every five taps
     for (let i = 0; i < numTaps - 4; i++) {
         const fiveTapInterval = (tapTimes[i + 4] - tapTimes[i]) / 4;
         intervalAverages.push(fiveTapInterval);
@@ -4202,21 +3356,13 @@ function calculateBPM(tapTimes) {
 
     // Include the remaining taps in the calculation
     const remainingTaps = numTaps % 5;
-    if (remainingTaps > 1) { // Only include if there are at least 2 remaining taps
-        const remainingAverage = (tapTimes[numTaps - 1] - tapTimes[numTaps - remainingTaps]) / (remainingTaps - 1);
+    if (remainingTaps > 0) {
+        const remainingAverage = (tapTimes[numTaps - 1] - tapTimes[numTaps - remainingTaps - 1]) / remainingTaps;
         intervalAverages.push(remainingAverage);
     }
 
-    // Filter out unreasonable intervals (30-300 BPM range)
-    // 30 BPM = 2000ms, 300 BPM = 200ms
-    const filteredIntervals = intervalAverages.filter(interval => interval >= 200 && interval <= 2000);
-    
-    if (filteredIntervals.length === 0) {
-        return 60000 / averageInterval; // Fall back to simple average if all filtered
-    }
-
-    // Calculate the final BPM based on the average of filtered intervals
-    const finalBPM = 60000 / (filteredIntervals.reduce((sum, interval) => sum + interval, 0) / filteredIntervals.length);
+    // Calculate the final BPM based on the average of every five taps
+    const finalBPM = 60000 / (intervalAverages.reduce((sum, interval) => sum + interval, 0) / intervalAverages.length);
 
     return finalBPM;
 }
@@ -4241,46 +3387,21 @@ function calculateBPM(tapTimes) {
 
 
   function listenForSongChanges() {
-      // Check if Tunebat auto-fetch is enabled and we have valid song details
-      const tunebatAutoToggle = document.getElementById('tunebat-auto-toggle');
-      if (tunebatAutoToggle && tunebatAutoToggle.checked && lastKnownSongDetails !== "" && lastKnownSongDetails !== "N/A") {
-          console.log("Auto-fetching BPM from Tunebat for song:", lastKnownSongDetails);
-          handleTunebatAutoFetch(lastKnownSongDetails);
-      }
-
       // Check if auto-save is enabled and we have valid song details
-      if (autoSaveEnabled && lastKnownSongDetails !== "" && lastKnownSongDetails !== "N/A") {
-        const currentBpmValue = Math.round(parseFloat(document.getElementById("bpm").textContent.trim()));
-        
-        // Only proceed if we have a valid BPM
-        if (!isNaN(currentBpmValue) && currentBpmValue > 0) {
+      if (autoSaveEnabled && lastKnownSongDetails !== "" && lastKnownBPM !== 0) {
         const autoSaveToggleSpan = document.getElementById("autoSaveSpanText");
-          const autoSaveToggleText = "Auto save in<br>BPM Manual Playlist";
-          autoSaveToggleSpan.innerHTML = autoSaveToggleText + "<br>waiting for change";
-          
-          // Check if this is a new song+BPM combination
-          const currentTimeStamp = Date.now();
-          const currentCombo = `${lastKnownSongDetails}_${currentBpmValue}`;
-          const lastSavedCombo = `${autoSaveLastSongDetails}_${autoSaveLastBPM}`;
-          
-          console.log(`Current combo: ${currentCombo}, Last saved: ${lastSavedCombo}, Time elapsed: ${currentTimeStamp - autoSaveTimeStamp}ms`);
-          
-          // Save if it's a new combination or enough time has passed
-          if ((currentCombo !== lastSavedCombo && currentSongUrl !== autoSaveLastSongUrl) || 
-              (currentTimeStamp - autoSaveTimeStamp >= 5666)) {
-            
-            console.log(`Saving new song/BPM combination: ${lastKnownSongDetails} - ${currentBpmValue}BPM`);
-            saveSongToPlaylist(lastKnownSongDetails, currentBpmValue, currentSongUrl);
-            
-            // Update last saved info
-            autoSaveLastSongDetails = lastKnownSongDetails;
-            autoSaveLastBPM = currentBpmValue;
-            autoSaveLastSongUrl = currentSongUrl;
+        const autoSaveToggleText = "Auto save in<br>BPM Playlist";
+        autoSaveToggleSpan.innerHTML = document.getElementById("extract-toggle2").checked ? autoSaveToggleText + "<br>waiting for change" : autoSaveToggleText;
+
+          const currentTimeStamp = new Date().getTime();
+        console.log((currentTimeStamp - autoSaveTimeStamp)+" currenttimeStamp - autoSaveTimeStamp IN LISTEN TO SONG CHANGED")
+          if (currentTimeStamp - autoSaveTimeStamp >= 5666) {
+              // Call function to save the song to a playlist
+              console.log(currentSongUrl + " currentsongurl IN AUTO SAVE SONG");
+              saveSongToPlaylist(lastKnownSongDetails, lastKnownBPM, currentSongUrl);
               autoSaveTimeStamp = currentTimeStamp;
           }
-        } else {
-          console.log("Not auto-saving: BPM is invalid or zero");
-        }
+
       }
   }
 
@@ -4290,32 +3411,16 @@ function calculateBPM(tapTimes) {
 
 // Function to save the song to a playlist based on its BPM
 async function saveSongToPlaylist(songTitle, bpm, trackURL) {
-  // Skip if invalid input or BPM is zero
-  if (!songTitle || !bpm || bpm <= 0) {
-    console.log("Invalid song data for playlist: missing title or BPM is zero/invalid");
-    return;
-  }
-
   const autoSaveToggleSpan = document.getElementById("autoSaveSpanText");
   const autoSaveToggleText = document.getElementById("extract-toggle2").checked ? "Auto save in<br>BPM Playlist" : "";
     try {
         autoSaveToggleSpan.innerHTML = autoSaveToggleText + " ⏳";
         // Get the track ID from the Spotify URL
         const trackId = extractTrackIdFromURL(trackURL);
-        
-        if (!trackId) {
-            console.log("Could not extract track ID from URL:", trackURL);
-            autoSaveToggleSpan.innerHTML = autoSaveToggleText + " ❌ No track ID";
-            setTimeout(() => {
-                autoSaveToggleSpan.innerHTML = autoSaveToggleText;
-            }, 7000);
-            return;
-        }
-        
         // Add loading indicator
         autoSaveToggleSpan.innerHTML = autoSaveToggleText + " ⏳";
         // Create or get the playlist with the name based on BPM
-        const playlistName = "~" + `${thresholdRound(bpm,0.495)} BPM Manual`;
+        const playlistName = `~${thresholdRound(bpm,0.495)} BPM Manual`;
         const playlistId = await getOrCreatePlaylist(playlistName);
         autoSaveToggleSpan.innerHTML = autoSaveToggleText + " ⏳";
         // Add the track to the playlist
@@ -4445,11 +3550,8 @@ async function addTrackToPlaylist(trackId, playlistId, accessToken) {
 }
 
 // Function to get or create a playlist based on its name
-async function getOrCreatePlaylist(playlistName, accessTokenParam) {
+async function getOrCreatePlaylist(playlistName) {
     try {
-        // Use passed accessToken parameter or fall back to global accessToken
-        const tokenToUse = accessTokenParam || accessToken;
-        
         // Get user ID
         const userId = await getUserId();
         
@@ -4466,12 +3568,12 @@ async function getOrCreatePlaylist(playlistName, accessTokenParam) {
         const response = await fetch(`https://api.spotify.com/v1/users/${userId}/playlists`, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${tokenToUse}`,
+                "Authorization": `Bearer ${accessToken}`,
                 "Content-Type": "application/json",
             },
           body: JSON.stringify({
             name: playlistName,
-            description: "Playlist created by BPM Flash app - @mihailv_ar | @mihailv_photos",
+            description: "Playlist created by BPM Flash App - @mihailv_ar | @mihailv_photos",
             public: true,
           }),
         });
@@ -4617,9 +3719,7 @@ const autoSaveToggle = document.getElementById("extract-toggle2");
 autoSaveToggle.addEventListener("change", function () {
   toggleAutoSave();
   if(autoSaveEnabled){
-    if(parseFloat(document.getElementById("bpm").textContent.trim()) !== 0){
     listenForSongChanges();
-    }
   }
 });
 
@@ -4650,11 +3750,11 @@ async function getUserId() {
       try {
         // Change button text to indicate adding
         this.innerHTML = "⏳";
-        const manualSongTitle = fetchSongTitleFromSpotify(accessToken);
+        const manualSongTitle = lastKnownSongDetails;
               const currentlyPlayingURL = await fetchTrackURL(accessToken);
               const trackId = extractTrackIdFromURL(currentlyPlayingURL);
-              const bpm = Math.round(document.getElementById("bpm").textContent.trim()); // removed fetchBPMFromSpotify(accessToken) as spotify no longer allows bpm get;
-              const playlistName = "~" + thresholdRound(bpm,0.495) + " BPM Manual";
+              const bpm = await fetchBPMFromSpotify(accessToken);
+              const playlistName = `~${thresholdRound(bpm,0.495)} BPM Manual`;
               const playlistId = await getOrCreatePlaylist(playlistName, accessToken);
               await addTrackToPlaylist(trackId, playlistId, accessToken);
               console.log(`Song ${manualSongTitle} added to playlist ${playlistName} ---MANUALLY--- successfully.`);
@@ -4677,6 +3777,37 @@ async function getUserId() {
         }, 7000);
     }
   });
+  document.getElementById("manualXmultiplied-check-add").addEventListener("click", async function() {
+    try {
+      // Change button text to indicate adding
+      this.innerHTML = "⏳";
+      const manualSongTitle = lastKnownSongDetails;
+            const currentlyPlayingURL = await fetchTrackURL(accessToken);
+            const trackId = extractTrackIdFromURL(currentlyPlayingURL);
+            const bpm = await fetchBPMFromSpotify(accessToken)*bpmMultiplier;
+            const playlistName = `~${thresholdRound(bpm,0.495)} BPM Manual`;
+            const playlistId = await getOrCreatePlaylist(playlistName, accessToken);
+            await addTrackToPlaylist(trackId, playlistId, accessToken);
+            console.log(`Song ${manualSongTitle} added to playlist ${playlistName} ---MANUALLY--- successfully.`);
+      // Change button text to indicate successful addition
+      this.innerHTML = "✅ to " + playlistName;
+
+      // Change button text back to normal after a delay
+      setTimeout(() => {
+          this.innerHTML = "Add in BPM Playlist<br>based on Multiplier";
+      }, 7000);
+        }catch (error) {
+        console.error("Error checking and adding song to playlist:", error);
+
+      // Change button text to indicate failure
+      this.innerHTML = "❌ to " + playlistName;
+      
+      // Change button text back to normal after a delay
+      setTimeout(() => {
+          this.innerHTML = "Add in BPM Playlist<br>based on Multiplier";
+      }, 7000);
+  }
+});
 
 
 function iterativeRounding(num) {
@@ -4766,526 +3897,484 @@ function wait(ms) {
     }
 }
 
-// Function to fetch BPM from Google Search
-async function fetchBPMFromTunebat(title, artist) {
-    if (!title || !artist) {
-        console.error("Title and artist are required for BPM search");
-        return null;
+async function getBPMFromAI(trackName, artistName) {
+    console.log('🤖 [BPM-Client] Falling back to AI analysis');
+    try {
+        const response = await fetch('/analyze-bpm-ai', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ trackName, artistName }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`AI analysis failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('✅ [BPM-Client] AI analysis complete. BPM:', data.bpm);
+        return data.bpm;
+    } catch (error) {
+        console.error('❌ [BPM-Client] AI analysis error:', error);
+        return 0;
+    }
+}
+
+// async function fetchBPMFromSpotify(accessToken) {
+//     // ... existing code until preview URL check ...
+    
+//     if (data.item && data.item.id) {
+//         console.log('🎵 [BPM-Client] Getting track details for:', data.item.name);
+//         const trackResponse = await fetch(`https://api.spotify.com/v1/tracks/${data.item.id}`, {
+//             method: "GET",
+//             headers: {
+//                 "Authorization": `Bearer ${accessToken}`,
+//             },
+//         });
+
+//         const trackData = await trackResponse.json();
+//         console.log('✅ [BPM-Client] Track details received');
+//         console.log('🔍 [BPM-Client] Preview URL:', trackData.preview_url ? 'Available' : 'Not available');
+        
+//         if (trackData.preview_url) {
+//             // ... existing preview URL code ...
+//         } else {
+//             console.log('❌ [BPM-Client] No preview URL available, using AI analysis');
+//             const bpm = await getBPMFromAI(data.item.name, data.item.artists.map(a => a.name).join(', '));
+//             if (bpm > 0) {
+//                 isTokenExpired = false;
+//                 return bpm;
+//             }
+//         }
+//     }
+//     // ... rest of existing code ...
+// }
+
+// // Update fetchBPMFromCustomTrackURL similarly
+// async function fetchBPMFromCustomTrackURL(trackURL) {
+//     // ... existing code until preview URL check ...
+    
+//     if (trackData.preview_url) {
+//         // ... existing preview URL code ...
+//     } else {
+//         console.log('❌ [BPM-Client] No preview URL available, using AI analysis');
+//         const bpm = await getBPMFromAI(trackData.name, trackData.artists.map(a => a.name).join(', '));
+//         return bpm || "N/A";
+//     }
+//     // ... rest of existing code ...
+// }
+
+// Rename existing tap-related variables
+const tapTempoButtonAdvanced = document.getElementById("tap-tempo");
+const clearTapsButtonAdvanced = document.getElementById("clear-taps");
+const tapTempoButtonSimple = document.getElementById("tap-tempo-simple");
+const clearTapsButtonSimple = document.getElementById("clear-taps-simple");
+
+// Simple tap BPM variables
+let simpleTapTimes = [];
+let simpleLastTapTime = 0;
+
+// Function to handle simple tap BPM calculation
+function handleSimpleTap() {
+    const currentTime = Date.now();
+    if (simpleLastTapTime !== 0) {
+        const interval = currentTime - simpleLastTapTime;
+        simpleTapTimes.push(interval);
+        
+        // Keep only the last 8 intervals
+        if (simpleTapTimes.length > 8) {
+            simpleTapTimes.shift();
+        }
+        
+        if (simpleTapTimes.length >= 4) {
+            // Calculate average interval
+            const averageInterval = simpleTapTimes.reduce((a, b) => a + b, 0) / simpleTapTimes.length;
+            // Convert to BPM
+            const bpm = Math.round(60000 / averageInterval);
+            
+            // Update custom BPM input field
+            const customBPMInput = document.getElementById("custom-bpm-input");
+            customBPMInput.value = bpm;
+            
+            // Update tap info
+            document.querySelector(".tap-info").textContent = `Current BPM: ${bpm}`;
+        }
+    }
+    simpleLastTapTime = currentTime;
+}
+
+// Function to clear simple tap data
+function clearSimpleTaps() {
+    simpleTapTimes = [];
+    simpleLastTapTime = 0;
+    document.querySelector(".tap-info").textContent = "Tap at least 4 times to get a BPM";
+}
+
+// Add event listeners for simple tap
+tapTempoButtonSimple.addEventListener("click", handleSimpleTap);
+clearTapsButtonSimple.addEventListener("click", clearSimpleTaps);
+
+// Mode selection handling
+const bpmModeSelector = document.querySelector(".bpm-mode-selector");
+const modeSections = {
+    manual: document.querySelector(".manual-input"),
+    microphone: document.querySelector(".microphone-input"),
+    youtube: document.querySelector(".youtube-input"),
+    search: document.querySelector(".search-input")
+};
+
+bpmModeSelector.addEventListener("change", function() {
+    // Hide all sections
+    Object.values(modeSections).forEach(section => {
+        section.style.display = "none";
+    });
+    
+    // Show selected section
+    const selectedMode = this.value;
+    modeSections[selectedMode].style.display = "inline-flex";
+    modeSections[selectedMode].style.flexDirection = "column";
+    modeSections[selectedMode].style.flexWrap = "wrap"; 
+    modeSections[selectedMode].style.alignItems = "stretch";
+    modeSections[selectedMode].style.justifyContent = "center";
+    modeSections[selectedMode].style.alignContent = "space-around";
+    
+
+});
+
+// YouTube BPM Analysis
+const youtubeInput = document.querySelector(".youtube-input .bpm-input");
+const youtubeAnalyzeBtn = document.querySelector(".youtube-input .analyze-btn");
+
+youtubeAnalyzeBtn.addEventListener("click", async function() {
+    const youtubeUrl = youtubeInput.value.trim();
+    if (!youtubeUrl) {
+        showAlert("Please enter a YouTube URL");
+        return;
+    }
+
+    // Show analysis status
+    const youtubeInfo = document.querySelector(".youtube-info");
+    youtubeInfo.textContent = "Analyzing... (this may take a minute)";
+    
+    try {
+        const response = await fetch("/analyze-youtube-bpm", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ url: youtubeUrl })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const customBPMInput = document.getElementById("custom-bpm-input");
+        customBPMInput.value = data.bpm;
+        
+        // Set flags for custom BPM mode
+        customBPM = data.bpm;
+        isCustomBPM = true;
+        customTrackURL = "";
+        
+        document.querySelector(".youtube-info").textContent = `Detected BPM: ${data.bpm}`;
+    } catch (error) {
+        console.error("Error analyzing YouTube video:", error);
+        const errorData = error.response?.data || {};
+        const mainError = errorData.error || error.message || "Unknown error";
+        const detailedError = errorData.details || "";
+        const fallbackError = errorData.fallbackError || "";
+        
+        // Show a user-friendly error message
+        let userMessage = "Having trouble analyzing this video. ";
+        if (mainError.includes('Could not extract video ID')) {
+            userMessage = "Invalid YouTube URL. Please make sure you've entered a valid YouTube video URL.";
+        } else if (mainError.includes('Could not analyze video')) {
+            userMessage += "Our fallback methods were not successful either. Please try a different video.";
+        } else {
+            userMessage += "Trying alternative methods to detect the BPM...";
+        }
+        
+        document.querySelector(".youtube-info").textContent = userMessage;
+        showAlert(userMessage);
+        
+        console.log("Detailed error info:", {
+            mainError,
+            detailedError,
+            fallbackError
+        });
+    }
+});
+
+// Manual Search BPM Analysis
+const searchInputs = document.querySelectorAll(".search-input .bpm-input");
+const searchAnalyzeBtn = document.querySelector(".search-input .analyze-btn");
+const currentSongBtn = document.querySelector(".search-input .current-song-btn");
+
+searchAnalyzeBtn.addEventListener("click", async function() {
+    const [songTitle, artist] = Array.from(searchInputs).map(input => input.value.trim());
+    
+    if (!songTitle || !artist) {
+        showAlert("Please enter both song title and artist");
+        return;
     }
 
     try {
-        // Clean up the title and artist - remove possible "feat." parts and parentheses
-        const cleanTitle = title.split(' - ')[0]
-            .replace(/\(feat\..*?\)/i, '')
-            .replace(/\(ft\..*?\)/i, '')
-            .replace(/\(with.*?\)/i, '')
-            .replace(/\[.*?\]/g, '')
-            .trim();
+        const response = await fetch("/analyze-bpm-ai", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                trackName: songTitle,
+                artistName: artist
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const customBPMInput = document.getElementById("custom-bpm-input");
+        customBPMInput.value = data.bpm;
+        
+        // Set flags for custom BPM mode
+        customBPM = data.bpm;
+        isCustomBPM = true;
+        customTrackURL = "";
+        
+        document.querySelector(".search-info").textContent = `Detected BPM: ${data.bpm}`;
+    } catch (error) {
+        console.error("Error searching for BPM:", error);
+        showAlert("Error searching for BPM. Please try again.");
+    }
+});
+
+// Microphone Analysis Variables
+let audioContext;
+let analyser;
+let microphone;
+let isRecording = false;
+let animationFrame;
+let beatDetector;
+let lastBeatTime = 0;
+let beatTimes = [];
+let volumeGain = 1.0;
+let thresholdValue = 0.3;
+let stableBPMEnabled = true;
+let beatFlashEnabled = false;
+
+// Canvas setup for waveform visualization
+const canvas = document.getElementById('waveformCanvas');
+const canvasCtx = canvas.getContext('2d');
+canvas.width = 600;
+canvas.height = 200;
+
+// Initialize audio context
+async function initAudioContext() {
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 2048;
+    } catch (error) {
+        console.error('Failed to initialize audio context:', error);
+        showAlert('Failed to initialize audio. Please check your browser settings.');
+    }
+}
+
+// Start microphone recording
+async function startMicrophoneRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        microphone = audioContext.createMediaStreamSource(stream);
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = volumeGain;
+        
+        microphone.connect(gainNode);
+        gainNode.connect(analyser);
+        
+        isRecording = true;
+        document.getElementById('start-mic').disabled = true;
+        document.getElementById('stop-mic').disabled = false;
+        document.querySelector('.mic-status').textContent = 'Recording...';
+        
+        // Start visualization and beat detection
+        visualize();
+        detectBeats();
+    } catch (error) {
+        console.error('Error accessing microphone:', error);
+        showAlert('Failed to access microphone. Please check your permissions.');
+    }
+}
+
+// Stop microphone recording
+function stopMicrophoneRecording() {
+    if (microphone) {
+        microphone.disconnect();
+        isRecording = false;
+        document.getElementById('start-mic').disabled = false;
+        document.getElementById('stop-mic').disabled = true;
+        document.querySelector('.mic-status').textContent = 'Recording stopped';
+        cancelAnimationFrame(animationFrame);
+    }
+}
+
+// Visualize audio waveform
+function visualize() {
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    
+    function draw() {
+        if (!isRecording) return;
+        
+        animationFrame = requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(dataArray);
+        
+        canvasCtx.fillStyle = 'rgb(20, 20, 20)';
+        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = 'rgb(0, 255, 0)';
+        canvasCtx.beginPath();
+        
+        const sliceWidth = canvas.width * 1.0 / bufferLength;
+        let x = 0;
+        
+        for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = v * canvas.height / 2;
             
-        const cleanArtist = artist.split(',')[0].trim();
-        
-        console.log(`Searching for BPM via Google for ${cleanTitle} by ${cleanArtist}`);
-        
-        // Clear any existing BPM option buttons
-        clearBpmOptionButtons();
-        
-        // Call the server endpoint
-        const response = await fetch(`/search-tunebat?title=${encodeURIComponent(cleanTitle)}&artist=${encodeURIComponent(cleanArtist)}`);
-        
-        if (response.ok) {
-            const data = await response.json();
+            if (i === 0) {
+                canvasCtx.moveTo(x, y);
+            } else {
+                canvasCtx.lineTo(x, y);
+            }
             
-            if (data && data.bpm && data.bpm !== 'N/A') {
-                console.log(`BPM found via Google: ${data.bpm} (confidence: ${data.confidence || 'unknown'}%)`);
+            x += sliceWidth;
+        }
+        
+        canvasCtx.lineTo(canvas.width, canvas.height / 2);
+        canvasCtx.stroke();
+    }
+    
+    draw();
+}
+
+// Detect beats from audio input
+function detectBeats() {
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    
+    function checkBeat() {
+        if (!isRecording) return;
+        
+        requestAnimationFrame(checkBeat);
+        analyser.getByteFrequencyData(dataArray);
+        
+        // Calculate average frequency
+        const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+        const normalizedAverage = average / 256;
+        
+        if (normalizedAverage > thresholdValue) {
+            const currentTime = Date.now();
+            if (currentTime - lastBeatTime > 200) { // Minimum 200ms between beats
+                lastBeatTime = currentTime;
+                beatTimes.push(currentTime);
                 
-                // If we have BPM clusters, display them as options
-                if (data.bpm_clusters && data.bpm_clusters.length > 0) {
-                    displayBpmOptionButtons(data.bpm_clusters, data.bpm);
+                // Keep only last 8 beats for calculation
+                if (beatTimes.length > 8) {
+                    beatTimes.shift();
                 }
                 
-                return {
-                    bpm: data.bpm,
-                    key: data.key || 'Unknown',
-                    title: data.title,
-                    artist: data.artist,
-                    method: 'google_search',
-                    confidence: data.confidence,
-                    bpm_clusters: data.bpm_clusters
-                };
-            } else {
-                console.error("No BPM data found via Google search");
-                return {
-                    bpm: 0,
-                    key: 'Unknown',
-                    title: title,
-                    artist: artist,
-                    method: 'google_search',
-                    success: false
-                };
-            }
-        } else {
-            console.error(`Error fetching BPM: ${response.status}`);
-            return {
-                bpm: 0,
-                key: 'Unknown',
-                title: title,
-                artist: artist,
-                method: 'google_search',
-                success: false
-            };
-        }
-    } catch (error) {
-        console.error("Error in BPM search:", error);
-        return {
-            bpm: 0,
-            key: 'Unknown',
-            title: title,
-            artist: artist,
-            method: 'google_search',
-            success: false
-        };
-    }
-}
-
-// Function to display BPM option buttons
-function displayBpmOptionButtons(bpmClusters, selectedBpm) {
-    const container = document.getElementById('bpm-buttons-container');
-    if (!container) return;
-    
-    // Clear any existing buttons
-    container.innerHTML = '<br><strong>Other BPM options:</strong><br>';
-    
-    // Create buttons for each BPM cluster
-    bpmClusters.forEach(cluster => {
-        const buttonText = `${cluster.bpm} BPM (${cluster.count})`;
-        const button = document.createElement('button');
-        button.textContent = buttonText;
-        button.className = 'bpm-option-btn';
-        button.dataset.bpm = cluster.bpm;
-        
-        // Style the button
-        button.style.margin = '3px';
-        button.style.padding = '5px 10px';
-        button.style.borderRadius = '4px';
-        button.style.border = '1px solid #444';
-        button.style.background = cluster.bpm == selectedBpm ? '#6c5ce7' : '#333';
-        button.style.color = '#fff';
-        button.style.cursor = 'pointer';
-        
-        // Add click event listener
-        button.addEventListener('click', function() {
-            setBpmFromOption(cluster.bpm);
-        });
-        
-        container.appendChild(button);
-    });
-    
-    // Show the container
-    container.style.display = 'inline-grid';
-}
-
-// Function to set BPM from option button
-function setBpmFromOption(bpmValue) {
-    const bpmElement = document.getElementById('bpm');
-    if (!bpmElement) return;
-    
-    // Update the BPM display
-    bpmElement.textContent = bpmValue;
-    
-    // Highlight the selected button
-    const buttons = document.querySelectorAll('.bpm-option-btn');
-    buttons.forEach(btn => {
-        if (parseInt(btn.dataset.bpm) === parseInt(bpmValue)) {
-            btn.style.background = '#6c5ce7';
-        } else {
-            btn.style.background = '#333';
-        }
-    });
-    
-    // Update the background color based on the new BPM
-    updateBackgroundColor(bpmValue);
-    
-    // Update other components that depend on BPM
-    lastKnownBPM = bpmValue;
-    updateTransition();
-    
-    console.log(`BPM manually set to ${bpmValue} from options`);
-}
-
-// Function to clear BPM option buttons
-function clearBpmOptionButtons() {
-    const container = document.getElementById('bpm-buttons-container');
-    if (container) {
-        container.innerHTML = '';
-        container.style.display = 'none';
-    }
-}
-
-// Legacy function maintained for backward compatibility
-// Now just redirects to the new unified BPM system
-function handleManualBPM() {
-    console.log("Legacy handleManualBPM called - redirecting to handleTapBPM");
-    handleTapBPM();
-}
-
-// Add this to the end of the document to set up the toggle listener
-const tunebatAutoToggle = document.getElementById('tunebat-auto-toggle');
-if (tunebatAutoToggle) {
-    tunebatAutoToggle.addEventListener('change', function() {
-        if (this.checked) {
-            console.log("Auto-fetch from Tunebat enabled");
-            
-            // Try to fetch immediately for current song if playing
-            if (lastKnownSongDetails !== "N/A" && lastKnownSongDetails !== "") {
-                handleTunebatAutoFetch(lastKnownSongDetails);
-            }
-        } else {
-            console.log("Auto-fetch from Tunebat disabled");
-        }
-    });
-}
-
-// Set up the "Set BPM" button to apply the custom BPM value
-document.addEventListener("DOMContentLoaded", function() {
-    const setCustomBpmButton = document.getElementById("set-custom-bpm");
-    if (setCustomBpmButton) {
-        setCustomBpmButton.addEventListener("click", function() {
-            const customBpmInput3 = document.getElementById("custom-bpm-input");
-            if (customBpmInput3) {
-                const bpmValue = parseFloat(customBpmInput3.value);
-                if (!isNaN(bpmValue) && bpmValue > 0) {
-                    // Update the main BPM display
-                    const bpmDisplay = document.getElementById("bpm");
-                    if (bpmDisplay) {
-                        bpmDisplay.textContent = Math.round(bpmValue.toFixed(2));
+                // Calculate BPM
+                if (beatTimes.length >= 2) {
+                    const intervals = [];
+                    for (let i = 1; i < beatTimes.length; i++) {
+                        intervals.push(beatTimes[i] - beatTimes[i - 1]);
                     }
                     
-                    // Update variables
-                    customBPM = bpmValue;
-                    lastKnownBPM = bpmValue;
-                    currentBPM = bpmValue;
-                    customTrackURL = "";
+                    const averageInterval = intervals.reduce((a, b) => a + b) / intervals.length;
+                    let bpm = Math.round(60000 / averageInterval);
                     
-                    // Clear any BPM option buttons
-                    clearBpmOptionButtons();
+                    // Apply stability check if enabled
+                    if (stableBPMEnabled) {
+                        // Only update if we have enough consistent readings
+                        if (intervals.length >= 4) {
+                            const deviation = Math.max(...intervals) - Math.min(...intervals);
+                            if (deviation < averageInterval * 0.2) { // 20% tolerance
+                                updateBPM(bpm);
+                            }
+                        }
+                    } else {
+                        updateBPM(bpm);
+                    }
                     
-                    // Update background color based on new BPM
-                    // updateBackgroundColor(bpmValue);
-                    updateTransition();
-                    
-                    console.log(`BPM manually set to ${bpmValue}`);
-                } else {
-                    console.log("Invalid BPM value");
+                    // Flash background if enabled
+                    if (beatFlashEnabled) {
+                        document.body.style.backgroundColor = customFlashingColors[Math.floor(Math.random() * customFlashingColors.length)];
+
+                        setTimeout(() => {
+                            document.body.style.backgroundColor = '';
+                        }, 100);
+                    }
                 }
             }
-        });
-        console.log("Set custom BPM button listener added");
-    } else {
-        console.error("Could not find set-custom-bpm button");
+        }
+    }
+    
+    checkBeat();
+}
+
+// Update BPM display and custom BPM input
+function updateBPM(bpm) {
+    const customBPMInput = document.getElementById("custom-bpm-input");
+    customBPMInput.value = bpm;
+    document.querySelector('.mic-status').textContent = `Detected BPM: ${bpm}`;
+    
+    // Set flags for custom BPM mode
+    customBPM = bpm;
+    isCustomBPM = true;
+    customTrackURL = "";
+}
+
+// Event listeners for microphone controls
+document.getElementById('start-mic').addEventListener('click', async () => {
+    if (!audioContext) await initAudioContext();
+    startMicrophoneRecording();
+});
+
+document.getElementById('stop-mic').addEventListener('click', stopMicrophoneRecording);
+
+// Settings controls
+document.getElementById('threshold-slider').addEventListener('input', function() {
+    thresholdValue = parseFloat(this.value);
+    document.getElementById('threshold-value').textContent = thresholdValue.toFixed(2);
+});
+
+document.getElementById('volume-gain-slider').addEventListener('input', function() {
+    volumeGain = parseFloat(this.value);
+    document.getElementById('volume-gain-value').textContent = volumeGain.toFixed(1);
+    if (microphone) {
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = volumeGain;
+        microphone.connect(gainNode);
+        gainNode.connect(analyser);
     }
 });
 
-// Function to handle auto fetching via Google Search
-async function handleTunebatAutoFetch(songDetails) {
-    if (!songDetails || songDetails === "N/A") return;
-    
-    // Split song details into artist and title
-    const parts = songDetails.split(' - ');
-    if (parts.length < 2) return;
-    
-    const artist = parts[0];
-    const title = parts.slice(1).join(' - ');
-    
-    // Show loading indicator in BPM display
-    const bpmElement = document.getElementById("bpm");
-    const oldBpm = bpmElement.textContent;
-    bpmElement.textContent = "...";
-    
-    // Clear any existing BPM option buttons
-    clearBpmOptionButtons();
-    
-    // Fetch BPM via Google Search
-    const result = await fetchBPMFromTunebat(title, artist);
-    
-    if (result && result.bpm && result.bpm > 0) {
-        // Update the BPM display
-        bpmElement.textContent = result.bpm;
-        
-        // Update other necessary UI elements and variables
-        lastKnownBPM = result.bpm;
-        updateBackgroundColor(result.bpm);
-        updateTransition();
-        
-        console.log(`Auto-fetched BPM: ${result.bpm}`);
-    } else {
-        // If no result was found, restore the old BPM
-        bpmElement.textContent = oldBpm;
-        console.log("No BPM found via auto-fetch");
-    }
-}
+document.getElementById('beat-flash-toggle').addEventListener('change', function() {
+    beatFlashEnabled = this.checked;
+});
 
-// Find the actual listenForSongChanges function and replace it
+document.getElementById('stable-bpm-toggle').addEventListener('change', function() {
+    stableBPMEnabled = this.checked;
+});
 
-// Function to populate the Tunebat search fields with current song
-function populateTunebatFields(songDetails) {
-    if (!songDetails || songDetails === "N/A") return;
-    
-    // Split song details into artist and title
-    const parts = songDetails.split(' - ');
-    if (parts.length < 2) return;
-    
-    const artist = parts[0];
-    const title = parts.slice(1).join(' - ');
-    
-    // Find the Tunebat input fields and populate them
-    const tunebatSection = document.querySelector('.tunebat-input');
-    if (tunebatSection) {
-        const titleInput = tunebatSection.querySelectorAll('.bpm-input')[0];
-        const artistInput = tunebatSection.querySelectorAll('.bpm-input')[1];
-        
-        if (titleInput && artistInput) {
-            titleInput.value = title;
-            artistInput.value = artist;
-            console.log(`Populated Tunebat fields with "${title}" by "${artist}"`);
-        }
-    }
-}
 
-// Add this function to update Tunebat fields whenever the song changes
-function updateTunebatFieldsWithCurrentSong() {
-    if (lastKnownSongDetails && lastKnownSongDetails !== "N/A") {
-        populateTunebatFields(lastKnownSongDetails);
-    }
-}
 
-// Add to updateBPMOverlay function to call this whenever a song changes
-function addTunebatPopulateToUpdateBPMOverlay() {
-    // This is a placeholder - we'll use search_replace to modify updateBPMOverlay directly
-}
 
-// Legacy function maintained for backward compatibility
-// Now just redirects to the unified clearTaps function
-function clearSecondaryTaps() {
-    console.log("Legacy clearSecondaryTaps called - redirecting to clearTaps");
-    clearTaps();
-}
-
-    // Set up event listeners for tempo control buttons
-    const tempoStopButton = document.getElementById("stop-button");
-    const tempoHalfButton = document.getElementById("half-button");
-    const tempoDoubleButton = document.getElementById("double-button");
-    const tempoQuadrupleButton = document.getElementById("quadruple-button");
-    const tempoResetButton = document.getElementById("reset-button");
-    
-    // Additional tempo buttons
-    const tempoOneThirdButton = document.getElementById("one-third-button");
-    const tempoTwoThirdsButton = document.getElementById("two-thirds-button");
-    const tempoThreeQuartersButton = document.getElementById("three-quarters-button");
-    const tempoTwoHalfButton = document.getElementById("two-half-button");
-    const tempoTripleButton = document.getElementById("triple-button");
-    const saveBaseBpmButton = document.getElementById("save-base-bpm");
-
-    // Variables to track tempo and BPM
-    let tempoMultiplier = 1;
-    let baseBPM = 0;
-    
-    tempoStopButton.addEventListener("click", function() {
-        modifyTempo(0);
-    });
-    
-    tempoHalfButton.addEventListener("click", function() {
-        modifyTempo(0.5);
-    });
-    
-    tempoDoubleButton.addEventListener("click", function() {
-        modifyTempo(2);
-    });
-    
-    tempoQuadrupleButton.addEventListener("click", function() {
-        modifyTempo(4);
-    });
-    
-    tempoResetButton.addEventListener("click", function() {
-        modifyTempo(1);
-    });
-    
-    // Add event listeners for additional tempo buttons
-    tempoOneThirdButton.addEventListener("click", function() {
-        modifyTempo(1/3);
-    });
-    
-    tempoTwoThirdsButton.addEventListener("click", function() {
-        modifyTempo(2/3);
-    });
-    
-    tempoThreeQuartersButton.addEventListener("click", function() {
-        modifyTempo(0.75);
-    });
-    
-    tempoTwoHalfButton.addEventListener("click", function() {
-        modifyTempo(2.5);
-    });
-    
-    tempoTripleButton.addEventListener("click", function() {
-        modifyTempo(3);
-    });
-    
-    // Add event listener for save base BPM button
-    saveBaseBpmButton.addEventListener("click", function() {
-        const bpmElement = document.getElementById("bpm");
-        if (!bpmElement) return;
-        
-        const currentBPM = parseFloat(bpmElement.textContent);
-        if (isNaN(currentBPM) || currentBPM <= 0) return;
-        
-        // Update base BPM and reset the multiplier
-        baseBPM = currentBPM;
-        tempoMultiplier = 1;
-        
-        // Update UI to reflect the new base
-        bpmElement.textContent = Math.round(baseBPM);
-        
-        // Update interval without resetting color sequence
-        updateFlashingInterval(baseBPM);
-        
-        console.log(`New base BPM set: ${baseBPM}`);
-    });
-    
-    // Function to modify tempo without resetting the color sequence
-    function modifyTempo(multiplier) {
-        tempoMultiplier = multiplier;
-        
-        const bpmElement = document.getElementById("bpm");
-        if (!bpmElement) return;
-        
-        // If baseBPM isn't set yet, initialize it
-        if (baseBPM <= 0) {
-            baseBPM = parseFloat(bpmElement.textContent);
-            if (isNaN(baseBPM) || baseBPM <= 0) return;
-        }
-        
-        // Calculate the new displayed BPM
-        const displayBPM = multiplier === 0 ? 0 : baseBPM * multiplier;
-        
-        // Update the display to show the modified BPM
-        bpmElement.textContent = Math.round(displayBPM);
-        
-        // Update the flashing interval
-        updateFlashingInterval(displayBPM);
-    }
-    
-    // Function to update the flashing interval without resetting color sequence
-    function updateFlashingInterval(bpm) {
-        const body = document.body;
-        
-        // Clear any existing interval
-        clearInterval(body.intervalId);
-        
-        // If BPM is 0 (stop), just clear the interval and set dark gray background
-        if (bpm <= 0) {
-            body.style.backgroundColor = "#424242";
-            return;
-        }
-        
-        // Calculate new interval with the BPM
-        const interval = 60 / bpm * 1000;
-        
-        // Set a new interval with the existing changeColorFunction (don't reset color sequence)
-        body.intervalId = setInterval(changeColorFunction, interval);
-    }
-
-    // Initialize the drag functionality for the BPM balloon
-    initializeBpmBalloon();
-    
-    // Original DOMContentLoaded code continues...
-    
-    // Make BPM balloon draggable
-    function initializeBpmBalloon() {
-        const balloon = document.getElementById("bpm-balloon");
-        const balloonBpm = document.getElementById("balloon-bpm");
-        
-        if (!balloon || !balloonBpm) return;
-        
-        // Initial BPM sync
-        updateBalloonBpm();
-        
-        // Set up MutationObserver to watch for changes to the main BPM element
-        const bpmElement = document.getElementById("bpm");
-        if (bpmElement) {
-            const observer = new MutationObserver(() => {
-                updateBalloonBpm();
-            });
-            
-            observer.observe(bpmElement, { 
-                childList: true,
-                characterData: true,
-                subtree: true 
-            });
-        }
-        
-        // Function to update the balloon BPM
-        function updateBalloonBpm() {
-            const bpmElement = document.getElementById("bpm");
-            if (bpmElement) {
-                balloonBpm.textContent = bpmElement.textContent;
-            }
-        }
-        
-        // Variables for drag functionality
-        let isDragging = false;
-        let offsetX, offsetY;
-        
-        // Mouse event listeners
-        balloon.addEventListener("mousedown", startDrag);
-        document.addEventListener("mousemove", drag);
-        document.addEventListener("mouseup", stopDrag);
-        
-        // Touch event listeners for mobile
-        balloon.addEventListener("touchstart", startDragTouch);
-        document.addEventListener("touchmove", dragTouch);
-        document.addEventListener("touchend", stopDragTouch);
-        
-        function startDrag(e) {
-            isDragging = true;
-            offsetX = e.clientX - balloon.getBoundingClientRect().left;
-            offsetY = e.clientY - balloon.getBoundingClientRect().top;
-            balloon.style.opacity = "0.7"; // Visual feedback
-        }
-        
-        function drag(e) {
-            if (!isDragging) return;
-            e.preventDefault();
-            
-            balloon.style.left = (e.clientX - offsetX) + "px";
-            balloon.style.top = (e.clientY - offsetY) + "px";
-        }
-        
-        function stopDrag() {
-            isDragging = false;
-            balloon.style.opacity = "1";
-        }
-        
-        function startDragTouch(e) {
-            isDragging = true;
-            const touch = e.touches[0];
-            offsetX = touch.clientX - balloon.getBoundingClientRect().left;
-            offsetY = touch.clientY - balloon.getBoundingClientRect().top;
-            balloon.style.opacity = "0.7"; // Visual feedback
-        }
-        
-        function dragTouch(e) {
-            if (!isDragging) return;
-            e.preventDefault();
-            
-            const touch = e.touches[0];
-            balloon.style.left = (touch.clientX - offsetX) + "px";
-            balloon.style.top = (touch.clientY - offsetY) + "px";
-        }
-        
-        function stopDragTouch() {
-            isDragging = false;
-            balloon.style.opacity = "1";
-        }
-    }
 
 });
+

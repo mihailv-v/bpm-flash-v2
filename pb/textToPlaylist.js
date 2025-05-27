@@ -1304,30 +1304,99 @@ async function fetchPlaylistData(playlistName) {
 }
 
 async function getBPMForTrack(trackId) {
+  console.log('🎵 [BPM-Client] Starting BPM fetch for track:', trackId);
   await wait(getRandomArbitrary(1, 2, 'seconds') * 1000); // Cooldown
+
   try {
-    // Fetch audio features for the track
-    const response = await fetch(`https://api.spotify.com/v1/audio-features/${trackId}`, {
-      method: 'GET',
+    // First, get the track details to get the preview URL
+    console.log('🎵 [BPM-Client] Fetching track details...');
+    const trackResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        "Authorization": `Bearer ${accessToken}`,
       },
     });
 
-    if (!response.ok) {
-      console.error('Error fetching audio features for track:', response.statusText);
+    if (!trackResponse.ok) {
+      console.error('❌ [BPM-Client] Failed to fetch track details:', trackResponse.status);
       return null;
     }
 
-    const audioFeaturesData = await response.json();
+    const trackData = await trackResponse.json();
+    console.log('✅ [BPM-Client] Track details received for:', trackData.name);
+    console.log('🔍 [BPM-Client] Preview URL:', trackData.preview_url ? 'Available' : 'Not available');
 
-    // Get and return the tempo (BPM) from the audio features data
-    const tempo = audioFeaturesData.tempo;
-    return tempo;
+    if (trackData.preview_url) {
+      // Use audio analysis with preview URL
+      console.log('📤 [BPM-Client] Sending preview URL to backend for analysis...');
+      const bpmResponse = await fetch('/analyze-bpm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ previewUrl: trackData.preview_url }),
+      });
 
+      if (!bpmResponse.ok) {
+        console.error('❌ [BPM-Client] BPM analysis request failed:', bpmResponse.status);
+        const errorData = await bpmResponse.json();
+        console.error('Error details:', errorData);
+        throw new Error('BPM analysis failed');
+      }
+
+      const bpmData = await bpmResponse.json();
+      console.log('✅ [BPM-Client] BPM analysis completed');
+      console.log('🎵 [BPM-Client] Detected BPM:', bpmData.bpm);
+      console.log('📊 [BPM-Client] Analysis details:', bpmData.analysisDetails);
+      return bpmData.bpm || null;
+    } else {
+      // No preview URL available, use AI analysis
+      console.log('❌ [BPM-Client] No preview URL available, using AI analysis');
+      const bpm = await getBPMFromAI(trackData.name, trackData.artists.map(a => a.name).join(', '));
+      return bpm || null;
+    }
   } catch (error) {
-    console.error('Error fetching audio features for track:', error);
+    console.error("❌ [BPM-Client] Error fetching BPM:", error);
+    console.error('   - Error name:', error.name);
+    console.error('   - Error message:', error.message);
+    console.error('   - Stack trace:', error.stack);
     return null;
+  }
+}
+
+// Helper function to wait between requests
+async function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Helper function to get random number in a range
+function getRandomArbitrary(min, max, unit = '') {
+  const value = Math.random() * (max - min) + min;
+  return unit === 'seconds' ? value : Math.floor(value);
+}
+
+// Helper function to get BPM from AI service
+async function getBPMFromAI(trackName, artistName) {
+  console.log('🤖 [BPM-Client] Falling back to AI analysis');
+  try {
+    const response = await fetch('/analyze-bpm-ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ trackName, artistName }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`AI analysis failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('✅ [BPM-Client] AI analysis complete. BPM:', data.bpm);
+    return data.bpm;
+  } catch (error) {
+    console.error('❌ [BPM-Client] AI analysis error:', error);
+    return 0;
   }
 }
 
@@ -3346,7 +3415,7 @@ async function generateBPMPlaylists(tracks, prevPlaylistName) {
 
         if (bpm) {
             const roundedBPM = thresholdRound(bpm,0.495);
-            const playlistName = `${roundedBPM} BPM`;
+            const playlistName = `~${roundedBPM} BPM Manual`;
 
             let playlist = await getAllUserPlaylistsWithCooldown(playlistName);
 

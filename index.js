@@ -16,16 +16,13 @@ const dotenv = require('dotenv').config();
 const { analyzeFullBuffer } = require('realtime-bpm-analyzer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const app = express();
-let audioDecode;
-(async () => {
-  audioDecode = (await import('audio-decode')).default;
-})();
+const audioDecode = require('audio-decode');
 const port = process.env.PORT || 8888;
 // Check if the code is running in a Repl.it environment
 
 
 // Define the base URL for Netlify deployment
-const netlifyBaseUrl = 'https://bpm-flash-v2.onrender.com';
+const netlifyBaseUrl = 'https://firefly-musical-alien.ngrok-free.app';
 const originURL = `${netlifyBaseUrl}`
 
 // Define the base URL for Repl.it deployment
@@ -887,10 +884,9 @@ app.post('/analyze-bpm', async (req, res) => {
     const arrayBuffer = await audioResponse.arrayBuffer();
     console.log('✅ [BPM-Analysis] Audio file converted to ArrayBuffer');
     console.log('📊 [BPM-Analysis] ArrayBuffer size:', arrayBuffer.byteLength, 'bytes');
-    // Ensure audioDecode is loaded
-    if (!audioDecode) {
-      audioDecode = (await import('audio-decode')).default;
-    }
+
+    // Decode audio using audio-decode
+    console.log('🎵 [BPM-Analysis] Decoding audio buffer...');
     const audioBuffer = await audioDecode(Buffer.from(arrayBuffer));
     console.log('✅ [BPM-Analysis] Audio buffer decoded');
     console.log('📊 [BPM-Analysis] Audio Buffer Details:');
@@ -1023,7 +1019,120 @@ app.post('/analyze-bpm-ai', async (req, res) => {
   }
 });
 
+app.post('/analyze-bpm-tb', async (req, res) => {
+  console.log('🎵 [TuneBat-Analysis] Starting TuneBat BPM analysis request');
+  try {
+    const { trackName, artistName, trackId } = req.body;
+    console.log(`🔍 [TuneBat-Analysis] Analyzing BPM for ${trackName} by ${artistName}`);
+
+    if (!trackName || !artistName || !trackId) {
+      throw new Error('trackName, artistName, and trackId are required');
+    }
+
+    // Format artist name and track name for URL
+    const formattedArtist = artistName.replace(/\s+/g, '-');
+    const formattedTrack = trackName.replace(/\s+/g, '-');
+    const tunebatUrl = `https://tunebat.com/Info/${formattedTrack}-${formattedArtist}/${trackId}`;
+    
+    console.log('🔗 [TuneBat-Analysis] Generated URL:', tunebatUrl);
+
+    // Use puppeteer to bypass Cloudflare protection
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage'
+      ]
+    });
+
+    try {
+      console.log('🌐 [TuneBat-Analysis] Opening browser...');
+      const page = await browser.newPage();
+
+      // Set a longer timeout for Cloudflare bypass
+      await page.setDefaultNavigationTimeout(30000);
+
+      // Intercept requests to bypass some Cloudflare checks
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        if (req.resourceType() === 'image' || req.resourceType() === 'stylesheet' || req.resourceType() === 'font') {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
+      console.log('🔄 [TuneBat-Analysis] Navigating to TuneBat and waiting for Cloudflare...');
+      await page.goto(tunebatUrl, { waitUntil: 'networkidle0' });
+
+      // Wait for the BPM element to be visible (indicating Cloudflare check passed)
+      await page.waitForSelector('.key-value', { timeout: 20000 });
+
+      // Extract all the audio features
+      const data = await page.evaluate(() => {
+        const getValue = (label) => {
+          // Find the div that contains the label text
+          const containers = Array.from(document.querySelectorAll('.ant-typography'));
+          const targetContainer = containers.find(el => 
+            el.textContent.toLowerCase() === label.toLowerCase() &&
+            el.parentElement?.querySelector('h3.ant-typography')
+          );
+          
+          if (!targetContainer?.parentElement?.querySelector('h3.ant-typography')) {
+            // For metrics in circles
+            const circleContainers = Array.from(document.querySelectorAll('.ant-typography.fd89q'));
+            const targetCircle = circleContainers.find(el => el.textContent.toLowerCase() === label.toLowerCase());
+            if (targetCircle) {
+              const valueElement = targetCircle.parentElement.querySelector('.ant-progress-text');
+              return valueElement ? valueElement.textContent.trim() : null;
+            }
+            return null;
+          }
+          
+          return targetContainer.parentElement.querySelector('h3.ant-typography').textContent.trim();
+        };
+
+        // Get artist and track names
+        const artistElement = document.querySelector('h3._6IzUR');
+        const trackElement = document.querySelector('h1.BSDxW');
+
+        return {
+          artist: artistElement ? artistElement.textContent.trim() : null,
+          track: trackElement ? trackElement.textContent.trim() : null,
+          bpm: getValue('bpm'),
+          key: getValue('key'),
+          camelot: getValue('camelot'),
+          duration: getValue('duration'),
+          energy: getValue('energy'),
+          danceability: getValue('danceability'),
+          happiness: getValue('happiness'),
+          acousticness: getValue('acousticness'),
+          instrumentalness: getValue('instrumentalness'),
+          liveness: getValue('liveness'),
+          speechiness: getValue('speechiness'),
+          loudness: getValue('loudness')
+        };
+      });
+
+      console.log('✅ [TuneBat-Analysis] Successfully extracted audio features:', data);
+      res.json(data);
+
+    } finally {
+      await browser.close();
+      console.log('🎵 [TuneBat-Analysis] Browser closed');
+    }
+
+  } catch (error) {
+    console.error('❌ [TuneBat-Analysis] Error:', error);
+    res.status(500).json({ error: 'Failed to analyze audio features', details: error.message });
+  }
+  
+  console.log('🎵 [TuneBat-Analysis] TuneBat analysis request completed');
+});
+
 // Add required packages at the top
+const puppeteer = require('puppeteer');
 const ytdl = require('ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
@@ -1037,64 +1146,11 @@ async function retry(fn, retries = 3, delay = 1000) {
       return await fn();
     } catch (error) {
       lastError = error;
-      console.log(`❌ [YouTube-Analysis] Attempt ${i + 1} failed:`, error.message);
-      if (i < retries - 1) {
-        console.log(`⏳ [YouTube-Analysis] Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // Exponential backoff
-      }
+      console.log(`Attempt ${i + 1} failed, retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   throw lastError;
-}
-
-// Common headers for ytdl requests
-const YTDL_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.5',
-  'Connection': 'keep-alive',
-  'Cache-Control': 'max-age=0'
-};
-
-// YouTube API integration
-const { google } = require('googleapis');
-const youtube = google.youtube('v3');
-
-// Initialize the YouTube API client
-const youtubeClient = youtube.videos;
-
-// Function to get video details from YouTube API
-async function getVideoDetails(videoId) {
-  try {
-    console.log('🔍 [YouTube-API] Getting video details for:', videoId);
-    const response = await youtube.list({
-      part: ['snippet', 'contentDetails'],
-      id: [videoId],
-      key: process.env.YOUTUBE_API_KEY
-    });
-
-    if (!response.data.items || response.data.items.length === 0) {
-      throw new Error('Video not found');
-    }
-
-    const video = response.data.items[0];
-    const duration = video.contentDetails.duration;
-    // Convert ISO 8601 duration to seconds
-    const durationSeconds = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/)
-      .slice(1)
-      .map(x => x ? parseInt(x) : 0)
-      .reduce((acc, x) => acc * 60 + x);
-
-    return {
-      title: video.snippet.title,
-      duration: durationSeconds,
-      description: video.snippet.description
-    };
-  } catch (error) {
-    console.error('❌ [YouTube-API] Error getting video details:', error);
-    throw error;
-  }
 }
 
 // Add YouTube BPM analysis endpoint
@@ -1109,70 +1165,112 @@ app.post('/analyze-youtube-bpm', async (req, res) => {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    // Extract video ID and get info with retries
-    const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i)?.[1];
-    if (!videoId) {
-      throw new Error('Could not extract video ID from URL');
-    }
-
-    // Get video info using YouTube API first
+    // Get video info and duration with retries and error handling
+    console.log('📥 [YouTube-Analysis] Fetching video info...');
     let videoInfo;
     try {
-      console.log('🔍 [YouTube-Analysis] Attempting to use YouTube API...');
-      const videoDetails = await getVideoDetails(videoId);
-      videoInfo = {
-        videoDetails: {
-          title: videoDetails.title,
-          lengthSeconds: videoDetails.duration.toString()
-        }
-      };
-      console.log('✅ [YouTube-Analysis] YouTube API fetch successful');
-    } catch (apiError) {
-      console.warn('⚠️ [YouTube-Analysis] YouTube API failed, falling back to ytdl-core');
-      
-      // Fall back to ytdl-core with retries
-      videoInfo = await retry(async () => {
-        return await ytdl.getInfo(url, {
-          requestOptions: { headers: YTDL_HEADERS }
+      // Extract video ID first
+      const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i)?.[1];
+      if (!videoId) {
+        throw new Error('Could not extract video ID from URL');
+      }
+
+      // Try YouTube API first
+      try {
+        console.log('🔍 [YouTube-Analysis] Attempting to use YouTube API...');
+        const videoDetails = await getVideoDetails(videoId);
+        videoInfo = {
+          videoDetails: {
+            title: videoDetails.title,
+            lengthSeconds: videoDetails.duration || '0'
+          }
+        };
+        console.log('✅ [YouTube-Analysis] YouTube API fetch successful');
+      } catch (apiError) {
+        console.warn('⚠️ [YouTube-Analysis] YouTube API failed, falling back to ytdl-core');
+        
+        // Fall back to ytdl-core
+        videoInfo = await retry(async () => {
+          return await ytdl.getInfo(url, {
+            requestOptions: {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+              }
+            }
+          });
         });
-      });
+      }
+    } catch (error) {
+      console.error('❌ [YouTube-Analysis] Failed to fetch video info:', error);
+      // Fall back to AI-based BPM detection
+      try {
+        const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i)?.[1];
+        if (!videoId) {
+          throw new Error('Could not extract video ID');
+        }
+        
+        const searchResponse = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet&key=${process.env.YOUTUBE_API_KEY}`);
+        const searchData = await searchResponse.json();
+        const videoTitle = searchData?.items?.[0]?.snippet?.title;
+        
+        if (videoTitle) {
+          console.log('🤖 [YouTube-Analysis] Falling back to AI analysis with video title:', videoTitle);
+          const bpm = await getBPMFromAI(videoTitle, '');
+          return res.json({ bpm, method: 'ai_fallback' });
+        } else {
+          throw new Error('Could not get video title');
+        }
+      } catch (fallbackError) {
+        console.error('❌ [YouTube-Analysis] Fallback also failed:', fallbackError);
+        return res.status(500).json({ 
+          error: 'Could not analyze video', 
+          details: error.message,
+          fallbackError: fallbackError.message 
+        });
+      }
     }
 
-    // Process video in segments
     const duration = parseInt(videoInfo.videoDetails.lengthSeconds);
     console.log('📊 [YouTube-Analysis] Video duration:', duration, 'seconds');
 
+    // Determine analysis strategy based on duration
     let segments = [];
     if (duration <= 30) {
       segments.push({ start: 0, duration: duration });
       console.log('📊 [YouTube-Analysis] Short video - analyzing entire duration');
+    } else if (duration <= 90) {
+      const segmentDuration = Math.min(30, Math.floor(duration / 2));
+      const middlePoint = Math.floor(duration / 2);
+      segments.push(
+        { start: middlePoint - segmentDuration, duration: segmentDuration },
+        { start: middlePoint, duration: segmentDuration }
+      );
+      console.log('📊 [YouTube-Analysis] Medium video - analyzing two segments');
     } else {
-      // Analyze three 30-second segments from different parts of the video
       const segmentDuration = 30;
-      const segmentStarts = [
-        0, // Beginning
-        Math.floor(duration / 2) - 15, // Middle
-        Math.max(0, duration - 30) // End
-      ];
-      segments = segmentStarts.map(start => ({
-        start,
-        duration: Math.min(segmentDuration, duration - start)
-      }));
-      console.log('📊 [YouTube-Analysis] Long video - analyzing segments:', segments);
+      const firstThird = Math.floor(duration / 3);
+      const secondThird = Math.floor(2 * duration / 3);
+      segments.push(
+        { start: firstThird - 15, duration: segmentDuration },
+        { start: secondThird - 15, duration: segmentDuration },
+        { start: Math.max(0, duration - 30), duration: segmentDuration }
+      );
+      console.log('📊 [YouTube-Analysis] Long video - analyzing three segments');
     }
 
-    // Process each segment
-    const chunks = [];
+    console.log('📊 [YouTube-Analysis] Analysis segments:', segments);
+
+    // Download and analyze each segment
     const bpmResults = [];
-    
     for (const segment of segments) {
       console.log(`🎵 [YouTube-Analysis] Processing segment: ${segment.start}s to ${segment.start + segment.duration}s`);
       
       try {
         const audioStream = ytdl(url, {
           filter: 'audioonly',
-          quality: 'highestaudio',
-          requestOptions: { headers: YTDL_HEADERS }
+          quality: 'highestaudio'
         });
 
         // Convert to audio buffer using ffmpeg
@@ -1187,26 +1285,32 @@ app.post('/analyze-youtube-bpm', async (req, res) => {
             })
             .on('end', () => {
               console.log('✅ [YouTube-Analysis] FFmpeg processing complete');
-            })
-            .pipe()
-            .on('data', (data) => {
-              chunks.push(data);
-            })
-            .on('end', () => {
-              console.log('✅ [YouTube-Analysis] Audio stream ended');
               resolve(Buffer.concat(chunks));
-            });
+            })
+            .on('data', chunk => chunks.push(chunk))
+            .pipe();
         });
 
-        // Ensure audioDecode is loaded
-        if (!audioDecode) {
-          audioDecode = (await import('audio-decode')).default;
-        }
-        // Create AudioContext and decode audio
-        const audioBuffer = await audioDecode(buffer);
-        console.log('✅ [YouTube-Analysis] Audio buffer decoded');
+        console.log('✅ [YouTube-Analysis] Audio buffer created, size:', buffer.length);
 
-        // Analyze the segment
+        // Create AudioContext and decode audio
+        const audioContext = getNewAudioContext();
+        console.log('🎵 [YouTube-Analysis] Creating AudioContext for segment analysis');
+        const audioBuffer = await new Promise((resolve, reject) => {
+          audioContext.decodeAudioData(buffer, 
+            (decodedData) => {
+              console.log('✅ [YouTube-Analysis] Audio successfully decoded');
+              resolve(decodedData);
+            },
+            (err) => {
+              console.error('❌ [YouTube-Analysis] Audio decode error:', err);
+              reject(err);
+            }
+          );
+        });
+
+        // Analyze the audio buffer for BPM
+        console.log('🔍 [YouTube-Analysis] Starting BPM analysis for segment');
         const result = await analyzeFullBuffer(audioBuffer);
         bpmResults.push(result.tempo);
         console.log(`✅ [YouTube-Analysis] Segment BPM:`, result.tempo);
@@ -1218,46 +1322,49 @@ app.post('/analyze-youtube-bpm', async (req, res) => {
     }
 
     if (bpmResults.length === 0) {
-      throw new Error('Could not analyze any segments successfully');
+      throw new Error('Failed to analyze any segments successfully');
     }
 
-    // Calculate final BPM
+    // Calculate average BPM
     const averageBPM = Math.round(bpmResults.reduce((a, b) => a + b, 0) / bpmResults.length);
     console.log('🎵 [YouTube-Analysis] Final average BPM:', averageBPM);
 
     res.json({ 
       bpm: averageBPM,
-      title: videoInfo.videoDetails.title,
-      duration: duration,
-      analyzedSegments: segments.length,
-      segmentResults: bpmResults,
-      confidence: bpmResults.length === segments.length ? 'high' : 'medium'
+      segments: bpmResults
     });
-
   } catch (error) {
-    console.error('❌ [YouTube-Analysis] Critical error:', error);
-    
-    // Try AI fallback if video info is available
-    try {
-      if (videoInfo?.videoDetails?.title) {
-        console.log('🤖 [YouTube-Analysis] Falling back to AI analysis');
-        const bpm = await getBPMFromAI(videoInfo.videoDetails.title, '');
-        return res.json({ 
-          bpm, 
-          method: 'ai_fallback',
-          confidence: 'low',
-          title: videoInfo.videoDetails.title
-        });
-      }
-      
-      throw new Error('No video information available for AI fallback');
-    } catch (fallbackError) {
-      console.error('❌ [YouTube-Analysis] Fallback also failed:', fallbackError);
-      return res.status(500).json({ 
-        error: 'Could not analyze video', 
-        details: error.message,
-        fallbackError: fallbackError.message 
-      });
-    }
+    console.error('❌ [YouTube-Analysis] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to analyze YouTube video', 
+      details: error.message,
+      stack: error.stack 
+    });
   }
 });
+
+// YouTube API integration
+const { google } = require('googleapis');
+const youtube = google.youtube('v3');
+
+// Initialize the YouTube API client
+const youtubeClient = youtube.videos;
+
+// Function to get video details from YouTube API
+async function getVideoDetails(videoId) {
+  try {
+    const response = await youtubeClient.list({
+      key: process.env.YOUTUBE_API_KEY,
+      part: ['snippet'],
+      id: [videoId],
+    });
+
+    if (response.data.items && response.data.items.length > 0) {
+      return response.data.items[0].snippet;
+    }
+    throw new Error('Video not found');
+  } catch (error) {
+    console.error('❌ [YouTube-API] Error fetching video details:', error);
+    throw error;
+  }
+}
